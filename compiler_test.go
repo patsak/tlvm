@@ -108,6 +108,11 @@ func TestCommonOperators(t *testing.T) {
 			})},
 			result: true,
 		},
+		{
+			name:   "while",
+			code:   `(setq i 0) (setq acc 0) (while (lt i 5) (setq acc (+ acc i)) (setq i (+ i 1))) acc`,
+			result: 0 + 1 + 2 + 3 + 4,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vmCode, err := Compile(tc.code, tc.options...)

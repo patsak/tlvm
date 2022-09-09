@@ -77,9 +77,23 @@ func EnvVariables(env ...string) CompileOption {
 }
 
 func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
+	defer func() {
+		errRec := recover()
+		if errRec == nil {
+			return
+		}
+		var ok bool
+		err, ok = errRec.(error)
+		if !ok {
+			err = errorx.IllegalArgument.New("%v", errRec)
+			return
+		}
+		err = wrapCompilationError(err, text)
+	}()
+
 	expressions, err := Read(text)
 	if err != nil {
-		return nil, err
+		return nil, wrapCompilationError(err, text)
 	}
 
 	vmByteCode := VMByteCode{
@@ -95,21 +109,6 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 	for _, opt := range options {
 		opt(&vmByteCode)
 	}
-
-	defer func() {
-		errRec := recover()
-		if errRec == nil {
-			return
-		}
-		var ok bool
-		err, ok = errRec.(error)
-		if !ok {
-			err = errorx.IllegalArgument.New("%v", errRec)
-			return
-		}
-		err = wrapCompilationError(err, text)
-
-	}()
 
 	for _, e := range expressions {
 		emit(e, &vmByteCode)
@@ -317,6 +316,8 @@ func emit(node any, cur *VMByteCode) {
 				emitProgn(v, cur)
 			case "print":
 				emitPrint(v, cur)
+			case "while":
+				emitWhile(v, cur)
 			default:
 				l := consToList(v)
 				if _, ok := cur.macrosByName[l[0].(literal).value]; ok {
@@ -714,6 +715,22 @@ func emitPrint(v *cons, cur *VMByteCode) {
 	args := consToList(v)
 	emit(args[1], cur)
 	cur.writeOpCode(opPrint)
+}
+
+func emitWhile(v *cons, cur *VMByteCode) {
+	l := consToList(v)
+	condition := l[1]
+	body := l[2:]
+	var checkConditionPtr, breakAddress int
+
+	checkConditionPtr = cur.pos()
+	emit(condition, cur)
+	cur.writeOpCode(opBr).iptr(&breakAddress).writeEmptyAddress()
+	for _, b := range body {
+		emit(b, cur)
+	}
+	cur.writeOpCode(opJmp).writeAddr(checkConditionPtr)
+	cur.modify(breakAddress, cur.addr(cur.pos()))
 }
 
 func consToList(c *cons) SExpressions {
