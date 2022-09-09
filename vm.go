@@ -259,34 +259,34 @@ func (v *vm) Execute() (errRes error) {
 
 			chFl := v.next()
 			switch v1.(type) {
-			case float64:
-				v.push(cmp(v1.(float64), v2.(float64), chFl))
-			case int64:
-				v.push(cmp(v1.(int64), v2.(int64), chFl))
-			case int:
-				v.push(cmp(v1.(int), v2.(int), chFl))
-			case str:
+			case float64, float32:
+				v.push(cmp(castFloat(v1), castFloat(v2), chFl))
+			case int64, int32, int16, int:
+				v.push(cmp(castInt(v1), castInt(v2), chFl))
+			case string:
 				v.push(cmp(v1.(string), v2.(string), chFl))
 			}
 		case opAdd:
 			v2 := v.pop()
 			v1 := v.pop()
 			switch vt := v2.(type) {
-			case float64:
-				v.push(v1.(float64) + vt)
-			case int64:
-				v.push(v1.(int64) + vt)
+			case float64, float32:
+				v.push(castFloat(vt) + castFloat(v1))
+			case int64, int, int32:
+				v.push(castInt(vt) + castInt(v1))
 			case string:
-				v.push(v1.(string) + vt)
+				v.push(vt + v1.(string))
+			default:
+				panic(fmt.Sprintf("unexpected type %T", vt))
 			}
 		case opSub:
 			v1 := v.pop()
 			v2 := v.pop()
 			switch vt := v2.(type) {
-			case float64:
-				v.push(vt - v1.(float64))
-			case int64:
-				v.push(vt - v1.(int64))
+			case float64, float32:
+				v.push(castFloat(vt) - castFloat(v1))
+			case int64, int, int32:
+				v.push(castInt(vt) - castInt(v1))
 			default:
 				panic(fmt.Sprintf("unexpected type %T", vt))
 			}
@@ -294,12 +294,10 @@ func (v *vm) Execute() (errRes error) {
 			v1 := v.pop()
 			v2 := v.pop()
 			switch vt := v2.(type) {
-			case float64:
-				v.push(vt / v1.(float64))
-			case int64:
-				v.push(vt / v1.(int64))
-			case int:
-				v.push(vt / v1.(int))
+			case float64, float32:
+				v.push(castFloat(vt) / castFloat(v1))
+			case int64, int, int32:
+				v.push(castInt(vt) / castInt(v1))
 			default:
 				panic(fmt.Sprintf("unexpected type %T", vt))
 			}
@@ -307,12 +305,10 @@ func (v *vm) Execute() (errRes error) {
 			v1 := v.pop()
 			v2 := v.pop()
 			switch vt := v2.(type) {
-			case float64:
-				v.push(vt * v1.(float64))
-			case int64:
-				v.push(vt * v1.(int64))
-			case int:
-				v.push(vt * v1.(int))
+			case float64, float32:
+				v.push(castFloat(vt) * castFloat(v1))
+			case int64, int, int32:
+				v.push(castInt(vt) * castInt(v1))
 			default:
 				panic(fmt.Sprintf("unexpected type %T", vt))
 			}
@@ -372,7 +368,7 @@ func (v *vm) Execute() (errRes error) {
 			v.ip = v.pop().(int)
 			v.bp = v.pop().(int)
 			nargs := v.pop().(int)
-			v.sp -= int(nargs)
+			v.sp -= nargs
 			v.push(result)
 		case opJmp:
 			v.goTo(v.arg())
@@ -382,8 +378,8 @@ func (v *vm) Execute() (errRes error) {
 			first := v.pop()
 			second := v.pop()
 			v.push(&cons{
-				second: second,
 				first:  first,
+				second: second,
 			})
 		case opCar:
 			c := v.pop().(*cons)
@@ -395,6 +391,7 @@ func (v *vm) Execute() (errRes error) {
 			c := v.pop()
 			fmt.Printf("%v\n", c)
 		case opHalt:
+			return
 		}
 	}
 
@@ -478,4 +475,43 @@ func cmp[T constraints.Ordered](v1, v2 T, chFl byte) bool {
 		return v1 > v2
 	}
 	return false
+}
+
+func castInt(v any) int64 {
+	switch vt := v.(type) {
+	case int64:
+		return vt
+	case int32:
+		return int64(vt)
+	case int16:
+		return int64(vt)
+	case int8:
+		return int64(vt)
+	case int:
+		return int64(vt)
+	default:
+		panic(errorx.Panic(errorx.IllegalArgument.New("can't cast %T to int", v)))
+	}
+}
+
+func castFloat(v any) float64 {
+	switch vt := v.(type) {
+	case int64:
+		return float64(vt)
+	case int:
+		return float64(vt)
+	case int32:
+		return float64(vt)
+	case int16:
+		return float64(vt)
+	case int8:
+		return float64(vt)
+	case float64:
+		return vt
+	case float32:
+		return float64(vt)
+	default:
+		panic(errorx.Panic(errorx.IllegalArgument.New("can't cast %T to int", v)))
+
+	}
 }

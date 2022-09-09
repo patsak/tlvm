@@ -32,7 +32,7 @@ func TestCommonOperators(t *testing.T) {
 		},
 		{
 			name:   "div",
-			code:   "(/ 2.4 2.0)",
+			code:   "(/ 2.4 2)",
 			result: 1.2,
 		},
 		{
