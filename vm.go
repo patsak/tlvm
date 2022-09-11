@@ -44,6 +44,7 @@ const (
 	opCdr
 	opNil
 	opPrint
+	opNoOp
 )
 
 const (
@@ -157,6 +158,8 @@ func (v *vm) CodeString() string {
 			b.WriteString("CDR")
 		case opPrint:
 			b.WriteString("PRINT")
+		case opNoOp:
+			b.WriteString("NOOP")
 		case opHalt:
 		default:
 			panic(errorx.IllegalFormat.New("unknown code %d", o))
@@ -390,6 +393,7 @@ func (v *vm) Execute() (errRes error) {
 		case opPrint:
 			c := v.pop()
 			fmt.Printf("%v\n", c)
+		case opNoOp:
 		case opHalt:
 			return
 		}

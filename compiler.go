@@ -475,10 +475,46 @@ func emitFunction(name string, expr SExpressions, cur *VMByteCode) {
 		for _, e := range expr[1:] {
 			emit(e, cur)
 		}
-
-		cur.debug("end define function %s", name)
-		cur.writeOpCode(opRet)
+		
+		emitReturn(name, len(args), cur)
 	})
+}
+
+func emitReturn(curFunctionName string, n int, cur *VMByteCode) {
+	labelAddr, ok := cur.findLabelAddress(curFunctionName)
+	if !ok {
+		return
+	}
+	const opCallOffset = 5
+	isRecursiveCall := opCode(cur.code[cur.pos()-opCallOffset]) == opCall &&
+		cur.code[cur.pos()-opCallOffset+1] == labelAddr[0] &&
+		cur.code[cur.pos()-opCallOffset+2] == labelAddr[1]
+
+	if !isRecursiveCall {
+		cur.debug("end define function %s", curFunctionName)
+		cur.writeOpCode(opRet)
+		return
+	}
+
+	cur.code = cur.code[:len(cur.code)-opCallOffset]
+
+	var retIndex, jumpPrepareIndex int
+
+	cur.writeOpCode(opJmp).iptr(&jumpPrepareIndex).writeEmptyAddress()
+
+	for i := 0; i < opCallOffset-3; i++ { // padding to preserve code length
+		cur.writeOpCode(opNoOp)
+	}
+	cur.writeOpCode(opJmp).iptr(&retIndex).writeEmptyAddress()
+
+	cur.modify(jumpPrepareIndex, cur.addr(cur.pos()))
+	for i := 0; i < n; i++ {
+		cur.writeOpCode(opStore).writeAddr(addrShiftLeftFlag | i)
+	}
+	cur.writeOpCode(opJmp).b(labelAddr...)
+	cur.debug("end define function %s", curFunctionName)
+	cur.writeOpCode(opRet)
+	cur.modify(retIndex, cur.addr(cur.pos()-1))
 }
 
 func emitCallFunction(cc *cons, cur *VMByteCode) {

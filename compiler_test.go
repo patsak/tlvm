@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -131,6 +132,28 @@ func TestCommonOperators(t *testing.T) {
 	}
 }
 
+func TestTailCallOptimization(t *testing.T) {
+	text := `
+(defun factTCO (n acc) 
+	(if (lt n 1) 
+		acc
+		(progn
+			(setq acc (* n acc))
+			(factTCO (- n 1) acc))))
+(defun factNoTCO (n) 
+	(if (lt n 1) 
+		1
+		(* n (factNoTCO (- n 1)))))
+ `
+	assert.Equal(t, fmt.Sprint(fact(50)), compileAndRun(t, text+`(factTCO 50 1)`))
+	assert.Equal(t, fmt.Sprint(fact(15)), compileAndRun(t, text+`(factTCO 15 1)`))
+	assert.Equal(t, fmt.Sprint(fact(15)), compileAndRun(t, text+`(factNoTCO 15)`))
+
+	vmCode := compile(t, text+`(factNoTCO 50)`)
+	vm := NewVM(vmCode)
+	require.Error(t, vm.Execute())
+}
+
 func TestEnvVariables(t *testing.T) {
 	t.Run("SimpleVariable", func(t *testing.T) {
 		vm := NewVM(compile(t, "(+ n 1)", EnvVariables("n")))
@@ -216,5 +239,12 @@ func compile(t *testing.T, text string, opts ...CompileOption) *VMByteCode {
 func run(t *testing.T, code *VMByteCode) string {
 	vm := NewVM(code)
 	require.NoError(t, vm.Execute())
-	return fmt.Sprintf("%s", vm.Result())
+	return fmt.Sprintf("%v", vm.Result())
+}
+
+func fact(n int) int {
+	if n <= 1 {
+		return 1
+	}
+	return n * fact(n-1)
 }
