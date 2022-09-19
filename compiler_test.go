@@ -100,6 +100,30 @@ func TestCommonOperators(t *testing.T) {
 			result: 100,
 		},
 		{
+			name: "closure",
+			code: `
+(defun inc (start) 
+	(lambda () 
+		(setq start (+ start 1))))
+(setq plus (inc 10))
+(plus)
+(plus)
+`,
+			result: 12,
+		},
+		{
+			name: "closureWithArgs",
+			code: `
+(defun inc (start) 
+	(lambda (v) 
+		(setq start (+ start v))))
+(setq plus (inc 10))
+(plus 10)
+(plus 15)
+`,
+			result: 35,
+		},
+		{
 			name: "externalFunction",
 			code: `(match "[a-z]+" "aaa")`,
 			options: []CompileOption{ExtFunctionsOrPanic(map[string]any{

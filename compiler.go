@@ -27,9 +27,18 @@ type VMByteCode struct {
 	code             []byte // result code
 }
 
+type scopeType int
+
+const (
+	scopeTypeLexical scopeType = iota
+	scopeTypeStackFrame
+)
+
 type scope struct {
 	parentScope  *scope
 	offset       int
+	closure      *scope
+	scopeType    scopeType
 	varAddresses map[any]int
 }
 
@@ -102,6 +111,9 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 		debugInfo: map[int]string{},
 		scope: &scope{
 			varAddresses: map[any]int{},
+			closure: &scope{
+				varAddresses: map[any]int{},
+			},
 		},
 		origPositionPointer: map[int]int{},
 		macrosByName:        map[string]macros{},
@@ -120,55 +132,42 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 func (c *VMByteCode) constAddr(v any) []byte {
 	_, ok := c.consts[v]
 	if ok {
-		return c.addr(c.consts[v])
+		return addr(c.consts[v])
 	}
 	c.consts[v] = len(c.consts)
 	c.constList = append(c.constList, v)
-	return c.addr(c.consts[v])
+	return addr(c.consts[v])
 }
 
 func (c *VMByteCode) findConstAddr(v any) ([]byte, bool) {
 	_, ok := c.consts[v]
 	if ok {
-		return c.addr(c.consts[v]), true
+		return addr(c.consts[v]), true
 	}
 	return nil, false
 }
 
-func (c *VMByteCode) stackAddr(v any) []byte {
-	res, ok := c.tryGetStackAddr(v)
-	if ok {
-		return res
-	}
-	return c.createNextStackAddr(v)
+func (c *scope) createNextAddr(v any) []byte {
+	c.varAddresses[v] = addrShiftRightFlag | c.offset
+	c.offset++
+	return addr(c.varAddresses[v])
 }
 
-func (c *VMByteCode) createNextStackAddr(v any) []byte {
-	c.scope.varAddresses[v] = addrShiftRightFlag | c.scope.offset
-	c.scope.offset++
-	return c.addr(c.scope.varAddresses[v])
+func (c *scope) storeAddr(v any, pos int) []byte {
+	c.varAddresses[v] = pos
+	return addr(pos)
 }
 
-func (c *VMByteCode) tryGetStackAddr(v any) ([]byte, bool) {
-	laddr, ok := c.findStackAddress(v)
-	if ok {
-		return laddr, true
-	}
-	return nil, false
-
-}
-
-func (c *VMByteCode) storeStackAddr(v any, pos int) []byte {
-	c.scope.varAddresses[v] = pos
-	return c.addr(pos)
-}
-
-func (c *VMByteCode) findStackAddress(v any) ([]byte, bool) {
+func (c *scope) findLocalAddress(v any) ([]byte, bool) {
 	var findAddr func(*scope) ([]byte, bool)
+
 	findAddr = func(s *scope) ([]byte, bool) {
+		if s == nil {
+			return nil, false
+		}
 		_, ok := s.varAddresses[v]
 		if ok {
-			return c.addr(s.varAddresses[v]), true
+			return addr(s.varAddresses[v]), true
 		}
 		if s.parentScope != nil {
 			return findAddr(s.parentScope)
@@ -176,17 +175,65 @@ func (c *VMByteCode) findStackAddress(v any) ([]byte, bool) {
 
 		return nil, false
 	}
-	return findAddr(c.scope)
+	return findAddr(c)
+}
+
+func (c *scope) closureAddress(v any) ([]byte, bool) {
+	a, ok := c.closure.varAddresses[v]
+	if ok {
+		return addr(a), ok
+	}
+	return nil, false
+}
+
+type valType int
+
+const (
+	valTypeConst valType = iota
+	valTypeClosure
+	valTypeLocal
+)
+
+func (c *scope) resolveAddress(v any) ([]byte, valType, bool) {
+	_, ok := c.varAddresses[v]
+	if ok {
+		return addr(c.varAddresses[v]), valTypeLocal, true
+	}
+	_, ok = c.closure.varAddresses[v]
+	if ok {
+		return addr(c.closure.varAddresses[v]), valTypeClosure, true
+	}
+
+	var findAddr func(*scope) ([]byte, valType, bool)
+	findAddr = func(s *scope) ([]byte, valType, bool) {
+		if s == nil {
+			return nil, 0, false
+		}
+		_, ok := s.varAddresses[v]
+		if ok {
+			if s.parentScope != nil && c.scopeType == scopeTypeStackFrame {
+				return c.closure.createNextAddr(v), valTypeClosure, true
+			} else {
+				return addr(s.varAddresses[v]), valTypeLocal, true
+			}
+		}
+		if s.parentScope != nil {
+			return findAddr(s.parentScope)
+		}
+
+		return nil, 0, false
+	}
+	return findAddr(c.parentScope)
 }
 
 func (c *VMByteCode) storeLabelAddress(cv string, pos int) []byte {
 	_, ok := c.labels[cv]
 	if ok {
-		return c.addr(c.labels[cv])
+		return addr(c.labels[cv])
 
 	}
 	c.labels[cv] = pos
-	return c.addr(pos)
+	return addr(pos)
 }
 
 func (c *VMByteCode) findLabelAddress(cv string) ([]byte, bool) {
@@ -194,10 +241,10 @@ func (c *VMByteCode) findLabelAddress(cv string) ([]byte, bool) {
 	if !ok {
 		return nil, false
 	}
-	return c.addr(v), true
+	return addr(v), true
 }
 
-func (c *VMByteCode) addr(addr int) []byte {
+func addr(addr int) []byte {
 	res := addr
 	var out [2]byte
 	binary.BigEndian.PutUint16(out[:], uint16(res))
@@ -222,8 +269,8 @@ func (c *VMByteCode) writeOpCode(op opCode) *VMByteCode {
 	return c.b(byte(op))
 }
 
-func (c *VMByteCode) writeAddr(addr int) *VMByteCode {
-	return c.b(c.addr(addr)...)
+func (c *VMByteCode) writeAddr(a int) *VMByteCode {
+	return c.b(addr(a)...)
 }
 
 func (c *VMByteCode) writeConstAddr(v any) *VMByteCode {
@@ -249,11 +296,15 @@ func (c *VMByteCode) modify(i int, o []byte) {
 	}
 }
 
-func (c *VMByteCode) inNewScope(f func()) {
+func (c *VMByteCode) inNewScope(typ scopeType, f func()) {
 	c.scope = &scope{
 		parentScope:  c.scope,
 		offset:       c.scope.offset,
 		varAddresses: map[any]int{},
+		closure: &scope{
+			varAddresses: map[any]int{},
+		},
+		scopeType: typ,
 	}
 	defer func() {
 		c.scope = c.scope.parentScope
@@ -338,21 +389,7 @@ func emit(node any, cur *VMByteCode) {
 		}
 		cur.writeOpCode(opPush).writeConstAddr(vt)
 	case literal:
-		parts := variableParts(v.value)
-		addr, hasAddr := cur.findStackAddress(parts[0])
-		if !hasAddr {
-			addr, hasAddr = cur.findConstAddr(parts[0])
-			if !hasAddr {
-				panic(errorx.IllegalFormat.New("variable '%s' is not defined", v.value).WithProperty(errRawTextPositionProperty, v.pos))
-			}
-		}
-		if len(parts) == 1 {
-			cur.writeOpCode(opPush).b(addr...)
-		} else {
-			cur.writeOpCode(opPushField).b(addr...).writeConstAddr(strings.Join(parts[1:], "."))
-
-		}
-
+		emitLiteral(v, cur)
 	default:
 		panic(errorx.IllegalFormat.New("unexpected value %v with type %t", v, v))
 	}
@@ -378,10 +415,10 @@ func emitAnd(cc *cons, cur *VMByteCode) {
 		writeOpCode(opJmp).iptr(&jmpAddr).writeEmptyAddress().
 		iptr(&falsePos).writeOpCode(opPush).writeConstAddr(boolFalse)
 
-	cur.modify(jmpAddr, cur.addr(cur.pos()))
+	cur.modify(jmpAddr, addr(cur.pos()))
 
 	for _, i := range indexes {
-		cur.modify(i, cur.addr(falsePos))
+		cur.modify(i, addr(falsePos))
 	}
 }
 
@@ -401,7 +438,7 @@ func emitOr(cc *cons, cur *VMByteCode) {
 		var i, next int
 		cur.writeOpCode(opBr).iptr(&next).writeEmptyAddress()
 		cur.writeOpCode(opJmp).iptr(&i).writeEmptyAddress()
-		cur.modify(next, cur.addr(cur.pos()))
+		cur.modify(next, addr(cur.pos()))
 		indexes = append(indexes, i)
 	}
 
@@ -410,9 +447,9 @@ func emitOr(cc *cons, cur *VMByteCode) {
 	cur.writeOpCode(opJmp).iptr(&lastJump).writeEmptyAddress()
 	cur.iptr(&truePos).writeOpCode(opPush).writeConstAddr(boolTrue)
 
-	cur.modify(lastJump, cur.addr(cur.pos()))
+	cur.modify(lastJump, addr(cur.pos()))
 	for _, i := range indexes {
-		cur.modify(i, cur.addr(truePos))
+		cur.modify(i, addr(truePos))
 	}
 }
 
@@ -456,28 +493,28 @@ func emitDefineFunction(cc *cons, cur *VMByteCode) {
 		cur.definedFunctions = cur.code
 		cur.code = code
 	}()
-
-	emitFunction(l[1].(literal).value, l[2:], cur)
+	cur.inNewScope(scopeTypeStackFrame, func() {
+		emitFunction(l[1].(literal).value, l[2:], cur)
+	})
 }
 
-func emitFunction(name string, expr SExpressions, cur *VMByteCode) {
-	cur.inNewScope(func() {
-		cur.scope.offset = 4 // skip stack entries stored by CALL opcode
+func emitFunction(name string, expr SExpressions, cur *VMByteCode) int {
+	cur.scope.offset = callFrameOffset + 1 // skip stack entries stored by CALL opcode
 
-		cur.debug("define function %s", name)
-		cur.storeLabelAddress(name, cur.pos())
+	cur.debug("define function %s", name)
+	cur.storeLabelAddress(name, cur.pos())
 
-		args := consToList(expr[0].(*cons))
-		for i, a := range args {
-			cur.storeStackAddr(a.(literal).value, addrShiftLeftFlag|i) // grow to stack bottom from base pointer
-		}
+	args := consToList(expr[0].(*cons))
+	for i, a := range args {
+		cur.scope.storeAddr(a.(literal).value, addrShiftLeftFlag|i) // grow to stack bottom from base pointer
+	}
 
-		for _, e := range expr[1:] {
-			emit(e, cur)
-		}
-		
-		emitReturn(name, len(args), cur)
-	})
+	for _, e := range expr[1:] {
+		emit(e, cur)
+	}
+
+	emitReturn(name, len(args), cur)
+	return len(args)
 }
 
 func emitReturn(curFunctionName string, n int, cur *VMByteCode) {
@@ -507,14 +544,14 @@ func emitReturn(curFunctionName string, n int, cur *VMByteCode) {
 	}
 	cur.writeOpCode(opJmp).iptr(&retIndex).writeEmptyAddress()
 
-	cur.modify(jumpPrepareIndex, cur.addr(cur.pos()))
+	cur.modify(jumpPrepareIndex, addr(cur.pos()))
 	for i := 0; i < n; i++ {
 		cur.writeOpCode(opStore).writeAddr(addrShiftLeftFlag | i)
 	}
 	cur.writeOpCode(opJmp).b(labelAddr...)
 	cur.debug("end define function %s", curFunctionName)
 	cur.writeOpCode(opRet)
-	cur.modify(retIndex, cur.addr(cur.pos()-1))
+	cur.modify(retIndex, addr(cur.pos()-1))
 }
 
 func emitCallFunction(cc *cons, cur *VMByteCode) {
@@ -526,23 +563,23 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 
 	extFunc, ok := cur.externalFunctions[args[0].(literal).value]
 	if ok {
-
 		cur.writeOpCode(opPush).b(cur.constAddr(extFunc)...)
 		cur.debug("call external function %s", args[0].(literal).value)
-		cur.writeOpCode(opExtCall).b(cur.addr(nargs)...)
+		cur.writeOpCode(opExtCall).b(addr(nargs)...)
 		return
 	}
 
 	functionName := args[0].(literal).value
-	fVariable, hasVariable := cur.tryGetStackAddr(functionName)
+	fVariable, _, hasVariable := cur.scope.resolveAddress(functionName)
 	if hasVariable {
-		cur.debug("call dynamic function %s", functionName)
-		cur.writeOpCode(opDynamicCall).b(fVariable...).b(cur.addr(nargs)...)
+		cur.debug("call closure %s", functionName)
+		cur.writeOpCode(opClosureCall).b(fVariable...).b(addr(nargs)...)
 		return
 	}
+
 	fAddress, hasLabel := cur.findLabelAddress(functionName)
 	if hasLabel {
-		cur.writeOpCode(opCall).b(fAddress...).b(cur.addr(nargs)...)
+		cur.writeOpCode(opCall).b(fAddress...).b(addr(nargs)...)
 		cur.debug("call function %s", functionName)
 		return
 	}
@@ -565,11 +602,11 @@ func emitIf(cc *cons, cur *VMByteCode) {
 	if len(l) > 3 { // with else
 		cur.writeOpCode(opJmp).iptr(&elseEnd).writeEmptyAddress()
 	}
-	cur.modify(elseStart, cur.addr(cur.pos()))
+	cur.modify(elseStart, addr(cur.pos()))
 	if len(l) > 3 { // with else
 		elseBlock := l[3]
 		emit(elseBlock, cur)
-		cur.modify(elseEnd, cur.addr(cur.pos()))
+		cur.modify(elseEnd, addr(cur.pos()))
 	}
 }
 
@@ -579,10 +616,22 @@ func emitSetq(cc *cons, cur *VMByteCode) {
 	rightValue := l[2]
 	emit(rightValue, cur)
 
-	addr := cur.stackAddr(variableName)
+	addr, vt, ok := cur.scope.resolveAddress(variableName)
+	if !ok {
+		addr = cur.scope.createNextAddr(variableName)
+		vt = valTypeLocal
+	}
 
-	cur.writeOpCode(opStore).b(addr...)
-	cur.writeOpCode(opPush).b(addr...)
+	switch vt {
+	case valTypeClosure:
+		cur.writeOpCode(opStoreClosureVal).b(addr...)
+		cur.writeOpCode(opPushClosureVal).b(addr...)
+	case valTypeLocal:
+		cur.writeOpCode(opStore).b(addr...)
+		cur.writeOpCode(opPush).b(addr...)
+	default:
+		errorx.Panic(errorx.IllegalArgument.New("unknown value type %d", valTypeLocal))
+	}
 }
 
 func emitList(cc *cons, cur *VMByteCode) {
@@ -602,31 +651,31 @@ func emitDoList(cc *cons, cur *VMByteCode) {
 	inputList := loopParams[1]
 	body := l[2:]
 
-	cur.inNewScope(func() {
+	cur.inNewScope(scopeTypeLexical, func() {
 		emit(inputList, cur)
 
-		addr := cur.createNextStackAddr(loopVar.(literal).value)
+		ad := cur.scope.createNextAddr(loopVar.(literal).value)
 
 		var begin int
 		cur.iptr(&begin)
-		cur.writeOpCode(opPush).b(addr...)
+		cur.writeOpCode(opPush).b(ad...)
 		cur.writeOpCode(opNil)
 		cur.writeOpCode(opNot)
 		var end int
 		cur.writeOpCode(opBr).iptr(&end).b(emptyAddr...)
-		cur.writeOpCode(opPush).b(addr...)
-		cur.writeOpCode(opPush).b(addr...)
+		cur.writeOpCode(opPush).b(ad...)
+		cur.writeOpCode(opPush).b(ad...)
 		cur.writeOpCode(opCar)
-		cur.writeOpCode(opStore).b(addr...)
+		cur.writeOpCode(opStore).b(ad...)
 
 		for _, e := range body {
 			emit(e, cur)
 		}
 		cur.writeOpCode(opPop)
 		cur.writeOpCode(opCdr)
-		cur.writeOpCode(opStore).b(addr...)
+		cur.writeOpCode(opStore).b(ad...)
 		cur.writeOpCode(opJmp).writeAddr(begin)
-		cur.modify(end, cur.addr(cur.pos()))
+		cur.modify(end, addr(cur.pos()))
 	})
 }
 
@@ -683,7 +732,7 @@ func emitDefineMacros(cc *cons, cur *VMByteCode) {
 		cur.scope = &stashedFrame
 	}()
 	for i, a := range args {
-		cur.storeStackAddr(a.(literal).value, addrShiftLeftFlag|i)
+		cur.scope.storeAddr(a.(literal).value, addrShiftLeftFlag|i)
 		m.args = append(m.args, a.(literal).value)
 	}
 	for _, b := range body {
@@ -723,6 +772,12 @@ func emitQuote(v any, cur *VMByteCode) {
 	cur.writeOpCode(opPush).writeConstAddr(v)
 }
 
+type closure struct {
+	addr   int
+	nargs  int
+	values []*any
+}
+
 func emitLambda(v *cons, cur *VMByteCode) {
 	labelID := cur.newLabelID()
 
@@ -732,12 +787,32 @@ func emitLambda(v *cons, cur *VMByteCode) {
 
 	cur.writeOpCode(opJmp).iptr(&endLambdaAddress).writeEmptyAddress().iptr(&startDefinitionAddress)
 
-	emitFunction(labelID, l[1:], cur)
+	cur.inNewScope(scopeTypeStackFrame, func() {
+		nargs := emitFunction(labelID, l[1:], cur)
 
-	funcDefinitionLength := cur.pos() - startDefinitionAddress
-	cur.modify(endLambdaAddress, cur.addr(addrShiftRightFlag|funcDefinitionLength))
-	cur.debug("label %s", labelID)
-	cur.writeOpCode(opPushAddr).writeAddr(addrShiftLeftFlag | funcDefinitionLength + 3 /*opcode + address */)
+		funcDefinitionLength := cur.pos() - startDefinitionAddress
+		cur.modify(endLambdaAddress, addr(addrShiftRightFlag|funcDefinitionLength))
+		cur.debug("label %s", labelID)
+
+		var addresses [][]byte
+		cur.writeOpCode(opPushClosure).
+			writeAddr(addrShiftLeftFlag | funcDefinitionLength + 3 /*opcode + address */).
+			writeAddr(nargs) // lambda arguments count
+		for v, _ := range cur.scope.closure.varAddresses {
+			a, ok := cur.scope.findLocalAddress(v)
+			if !ok {
+				errorx.Panic(errorx.IllegalState.New("closure variable must exists in local variables in parent scope"))
+			}
+			addresses = append(addresses, a)
+		}
+
+		// write closure variables count
+		cur.b(addr(len(addresses))...)
+		for _, a := range addresses {
+			cur.b(a...)
+		}
+	})
+
 }
 
 func emitProgn(v *cons, cur *VMByteCode) {
@@ -766,7 +841,31 @@ func emitWhile(v *cons, cur *VMByteCode) {
 		emit(b, cur)
 	}
 	cur.writeOpCode(opJmp).writeAddr(checkConditionPtr)
-	cur.modify(breakAddress, cur.addr(cur.pos()))
+	cur.modify(breakAddress, addr(cur.pos()))
+}
+
+func emitLiteral(v literal, cur *VMByteCode) {
+	parts := variableParts(v.value)
+	addr, vt, ok := cur.scope.resolveAddress(parts[0])
+	if !ok {
+		addr, ok = cur.findConstAddr(parts[0])
+		if !ok {
+			errorx.Panic(errorx.IllegalArgument.New("unknown literal '%s'", v.value))
+		}
+		vt = valTypeConst
+	}
+	switch vt {
+	case valTypeClosure:
+		cur.writeOpCode(opPushClosureVal).b(addr...)
+	case valTypeLocal, valTypeConst:
+		if len(parts) == 1 {
+			cur.writeOpCode(opPush).b(addr...)
+		} else {
+			cur.writeOpCode(opPushField).b(addr...).writeConstAddr(strings.Join(parts[1:], "."))
+		}
+	default:
+		errorx.Panic(errorx.IllegalArgument.New("unknown value type '%d'", vt))
+	}
 }
 
 func consToList(c *cons) SExpressions {

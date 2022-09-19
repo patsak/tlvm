@@ -20,7 +20,9 @@ type opCode byte
 
 const (
 	opPush opCode = iota
-	opPushAddr
+	opPushClosureVal
+	opStoreClosureVal
+	opPushClosure
 	opPushField
 	opStore
 	opPop
@@ -35,9 +37,10 @@ const (
 	opNot
 	opTrue
 	opCall
-	opDynamicCall
+	opClosureCall
 	opExtCall
 	opRet
+	opRetClosure
 	opHalt
 	opCons
 	opCar
@@ -72,6 +75,8 @@ type vm struct {
 	debugInfo                   map[int]string // debug string by instruction position
 	originalTextPositionPointer map[int]int    // position in original code text by instruction position
 }
+
+const callFrameOffset = 4
 
 func NewVM(output *VMByteCode) *vm {
 	vm := &vm{
@@ -114,12 +119,22 @@ func (v *vm) CodeString() string {
 		switch opCode(o) {
 		case opPush:
 			b.WriteString(fmt.Sprintf("PUSH %s", v.strStackAddr()))
-		case opPushAddr:
-			b.WriteString(fmt.Sprintf("PUSHADDR %s", v.strIpAddr()))
+		case opPushClosure:
+			b.WriteString(fmt.Sprintf("PUSHCLOSURE %s", v.strIpAddr()))
+			nargs := v.arg()
+			nclosurevals := v.arg()
+			b.WriteString(fmt.Sprintf(", %d args, %d closures:", nargs, nclosurevals))
+			for i := 0; i < nclosurevals; i++ {
+				b.WriteString(fmt.Sprintf(" %s", v.strStackAddr()))
+			}
 		case opPushField:
 			b.WriteString(fmt.Sprintf("PUSHFIELD %s %s", v.strStackAddr(), v.strStackAddr()))
-		case opDynamicCall:
-			b.WriteString(fmt.Sprintf("DYNCALL %s %d", v.strStackAddr(), v.stackAddrArg()))
+		case opPushClosureVal:
+			b.WriteString(fmt.Sprintf("PUSHCLOSUREVAL %s", v.strStackAddr()))
+		case opStoreClosureVal:
+			b.WriteString(fmt.Sprintf("STORECLOSERVAL %s", v.strStackAddr()))
+		case opClosureCall:
+			b.WriteString(fmt.Sprintf("CLOSURECALL %s %s", v.strStackAddr(), v.strStackAddr()))
 		case opStore:
 			b.WriteString(fmt.Sprintf("STORE %s", v.strStackAddr()))
 		case opAdd:
@@ -239,8 +254,26 @@ func (v *vm) Execute() (errRes error) {
 		case opPush:
 			a := v.stackAddrArg()
 			v.push(v.stack[a])
-		case opPushAddr:
-			v.push(v.ipAddrArg())
+		case opPushClosureVal:
+			a := v.closureAddr()
+			v.push(*v.closure()[a])
+		case opStoreClosureVal:
+			vv := v.pop()
+			a := v.closureAddr()
+			ptr := v.closure()[a]
+			*ptr = vv
+		case opPushClosure:
+			ip := v.ipAddrArg()
+			n := v.arg()
+			nClosureVars := v.arg()
+			var closureVars []*any
+			for i := 0; i < nClosureVars; i++ {
+				pos := v.stackAddrArg()
+				vv := v.stack[pos]
+				closureVars = append(closureVars, &vv)
+			}
+
+			v.push(&closure{ip, n, closureVars})
 		case opPushField:
 			variableAddr := v.stackAddrArg()
 			fieldPathAddr := v.stackAddrArg()
@@ -348,28 +381,35 @@ func (v *vm) Execute() (errRes error) {
 			}
 			values := fn.Call(args)
 			v.push(values[0].Interface())
-		case opDynamicCall:
+		case opClosureCall:
 			a := v.stackAddrArg()
-			addr := v.stack[a].(int)
+			cl := v.stack[a].(*closure)
 			nargs := v.arg()
-			v.push(nargs)
+			if nargs != cl.nargs {
+				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
+			}
+			addr := cl.addr
+			v.push(cl.nargs)
+			v.push(cl.values)
 			v.push(v.bp)
 			v.push(v.ip)
-			v.bp = v.sp - 3
+			v.bp = v.sp - callFrameOffset
 			v.goTo(addr)
 		case opCall:
 			addr := v.arg()
 			nargs := v.arg()
 			v.push(nargs)
+			v.push(nil)
 			v.push(v.bp)
 			v.push(v.ip)
-			v.bp = v.sp - 3
+			v.bp = v.sp - callFrameOffset
 			v.goTo(addr)
 		case opRet:
 			result := v.pop()
-			v.sp = v.bp + 3
+			v.sp = v.bp + 4
 			v.ip = v.pop().(int)
 			v.bp = v.pop().(int)
+			v.pop() // skip closure values
 			nargs := v.pop().(int)
 			v.sp -= nargs
 			v.push(result)
@@ -410,6 +450,14 @@ func (v *vm) arg() int {
 
 func (v *vm) stackAddrArg() int {
 	return v.addrFromArg(v.bp, v.arg())
+}
+
+func (v *vm) closureAddr() int {
+	return v.addrFromArg(0, v.arg())
+}
+
+func (v *vm) closure() []*any {
+	return v.stack[v.bp+2].([]*any)
 }
 
 func (v *vm) ipAddrArg() int {
