@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -12,9 +13,9 @@ import (
 )
 
 type VMByteCode struct {
-	consts               map[any]int // pointers to constants
+	consts               map[any]ptr // pointers to constants
 	constList            []any
-	labels               map[string]int // pointers to labels in code
+	labels               map[string]ptr // pointers to labels in code
 	scope                *scope         // current variables scope
 	macrosByName         map[string]macros
 	externalFunctions    map[string]reflect.Value
@@ -39,7 +40,7 @@ type scope struct {
 	offset       int
 	closure      *scope
 	scopeType    scopeType
-	varAddresses map[any]int
+	varAddresses map[any]ptr
 }
 
 var emptyAddr = []byte{0, 0}
@@ -106,13 +107,13 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 	}
 
 	vmByteCode := VMByteCode{
-		consts:    map[any]int{},
-		labels:    map[string]int{},
+		consts:    map[any]ptr{},
+		labels:    map[string]ptr{},
 		debugInfo: map[int]string{},
 		scope: &scope{
-			varAddresses: map[any]int{},
+			varAddresses: map[any]ptr{},
 			closure: &scope{
-				varAddresses: map[any]int{},
+				varAddresses: map[any]ptr{},
 			},
 		},
 		origPositionPointer: map[int]int{},
@@ -129,61 +130,57 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 	return &vmByteCode, nil
 }
 
-func (c *VMByteCode) constAddr(v any) []byte {
+func (c *VMByteCode) constAddr(v any) btUint {
 	_, ok := c.consts[v]
 	if ok {
-		return addr(c.consts[v])
+		return makeByteUint(c.consts[v])
 	}
-	c.consts[v] = len(c.consts)
+	c.consts[v] = ptr(len(c.consts))
 	c.constList = append(c.constList, v)
-	return addr(c.consts[v])
+	return makeByteUint(c.consts[v])
 }
 
-func (c *VMByteCode) findConstAddr(v any) ([]byte, bool) {
+func (c *VMByteCode) findConstAddr(v any) (btUint, bool) {
 	_, ok := c.consts[v]
 	if ok {
-		return addr(c.consts[v]), true
+		return makeByteUint(c.consts[v]), true
 	}
-	return nil, false
+	return btUint{}, false
 }
 
-func (c *scope) createNextAddr(v any) []byte {
-	c.varAddresses[v] = addrShiftRightFlag | c.offset
+func (c *scope) createNextAddr(v any) btUint {
+	c.varAddresses[v] = offsetAddress(c.offset)
 	c.offset++
-	return addr(c.varAddresses[v])
+	return makeByteUint(c.varAddresses[v])
 }
 
-func (c *scope) storeAddr(v any, pos int) []byte {
+func (c *scope) storeAddr(v any, pos ptr) btUint {
 	c.varAddresses[v] = pos
-	return addr(pos)
+	return makeByteUint(pos)
 }
 
-func (c *scope) findLocalAddress(v any) ([]byte, bool) {
-	var findAddr func(*scope) ([]byte, bool)
-
-	findAddr = func(s *scope) ([]byte, bool) {
-		if s == nil {
-			return nil, false
-		}
-		_, ok := s.varAddresses[v]
-		if ok {
-			return addr(s.varAddresses[v]), true
-		}
-		if s.parentScope != nil {
-			return findAddr(s.parentScope)
-		}
-
-		return nil, false
+func (c *scope) findLocalAddress(v any) (btUint, valType, bool) {
+	if c == nil {
+		return btUint{}, 0, false
 	}
-	return findAddr(c)
+	localAddr, ok := c.varAddresses[v]
+	if ok {
+		return makeByteUint(localAddr), valTypeLocal, true
+	}
+	closureAddr, ok := c.closure.varAddresses[v]
+	if ok {
+		return makeByteUint(closureAddr), valTypeClosure, true
+	}
+
+	return btUint{}, 0, false
 }
 
-func (c *scope) closureAddress(v any) ([]byte, bool) {
+func (c *scope) closureAddress(v any) (btUint, bool) {
 	a, ok := c.closure.varAddresses[v]
 	if ok {
-		return addr(a), ok
+		return makeByteUint(a), ok
 	}
-	return nil, false
+	return btUint{}, false
 }
 
 type valType int
@@ -194,61 +191,65 @@ const (
 	valTypeLocal
 )
 
-func (c *scope) resolveAddress(v any) ([]byte, valType, bool) {
-	_, ok := c.varAddresses[v]
+func (c *scope) resolveAddress(v any) (btUint, valType, bool) {
+	localAddr, ok := c.varAddresses[v]
 	if ok {
-		return addr(c.varAddresses[v]), valTypeLocal, true
+		return makeByteUint(localAddr), valTypeLocal, true
 	}
-	_, ok = c.closure.varAddresses[v]
+	closureAddr, ok := c.closure.varAddresses[v]
 	if ok {
-		return addr(c.closure.varAddresses[v]), valTypeClosure, true
+		return makeByteUint(closureAddr), valTypeClosure, true
 	}
 
-	var findAddr func(*scope) ([]byte, valType, bool)
-	findAddr = func(s *scope) ([]byte, valType, bool) {
+	var findAddr func(*scope) (btUint, valType, bool)
+	findAddr = func(s *scope) (btUint, valType, bool) {
 		if s == nil {
-			return nil, 0, false
+			return btUint{}, 0, false
 		}
 		_, ok := s.varAddresses[v]
 		if ok {
 			if s.parentScope != nil && c.scopeType == scopeTypeStackFrame {
 				return c.closure.createNextAddr(v), valTypeClosure, true
 			} else {
-				return addr(s.varAddresses[v]), valTypeLocal, true
+				return makeByteUint(s.varAddresses[v]), valTypeLocal, true
 			}
 		}
 		if s.parentScope != nil {
-			return findAddr(s.parentScope)
+			res, vt, ok := findAddr(s.parentScope)
+			if ok && vt == valTypeClosure && s.scopeType == scopeTypeStackFrame { // close variable
+				s.closure.createNextAddr(v)
+			}
+			return res, vt, ok
 		}
 
-		return nil, 0, false
+		return btUint{}, 0, false
 	}
 	return findAddr(c.parentScope)
 }
 
-func (c *VMByteCode) storeLabelAddress(cv string, pos int) []byte {
+func (c *VMByteCode) storeLabelAddress(cv string, pos ptr) btUint {
 	_, ok := c.labels[cv]
 	if ok {
-		return addr(c.labels[cv])
+		return makeByteUint(c.labels[cv])
 
 	}
-	c.labels[cv] = pos
-	return addr(pos)
+	c.labels[cv] = ptr(pos)
+	return makeByteUint(pos)
 }
 
-func (c *VMByteCode) findLabelAddress(cv string) ([]byte, bool) {
+func (c *VMByteCode) findLabelAddress(cv string) (btUint, bool) {
 	v, ok := c.labels[cv]
 	if !ok {
-		return nil, false
+		return btUint{}, false
 	}
-	return addr(v), true
+	return makeByteUint(v), true
 }
 
-func addr(addr int) []byte {
+func makeByteUint(addr ptr) btUint {
 	res := addr
 	var out [2]byte
 	binary.BigEndian.PutUint16(out[:], uint16(res))
-	return out[:]
+	return out
 }
 
 func (c *VMByteCode) origPos(pos int) {
@@ -269,30 +270,39 @@ func (c *VMByteCode) writeOpCode(op opCode) *VMByteCode {
 	return c.b(byte(op))
 }
 
-func (c *VMByteCode) writeAddr(a int) *VMByteCode {
-	return c.b(addr(a)...)
+func (c *VMByteCode) writePointer(a ptr) *VMByteCode {
+	return c.writeAddress(makeByteUint(a))
+}
+
+func (c *VMByteCode) writeAddress(a btUint) *VMByteCode {
+	bts := a[:]
+	return c.b(bts...)
+}
+
+func (c *VMByteCode) writeInt(a int) *VMByteCode {
+	return c.writePointer(ptr(a))
 }
 
 func (c *VMByteCode) writeConstAddr(v any) *VMByteCode {
-	return c.b(c.constAddr(v)...)
+	return c.writeAddress(c.constAddr(v))
 }
 
 func (c *VMByteCode) writeEmptyAddress() *VMByteCode {
 	return c.b(emptyAddr...)
 }
 
-func (c *VMByteCode) iptr(p *int) *VMByteCode {
+func (c *VMByteCode) iptr(p *ptr) *VMByteCode {
 	*p = c.pos()
 	return c
 }
 
-func (c *VMByteCode) pos() int {
-	return len(c.code)
+func (c *VMByteCode) pos() ptr {
+	return ptr(len(c.code))
 }
 
-func (c *VMByteCode) modify(i int, o []byte) {
+func (c *VMByteCode) modify(i ptr, o btUint) {
 	for j := range o {
-		c.code[i+j] = o[j]
+		c.code[int(i+ptr(j))] = o[j]
 	}
 }
 
@@ -300,9 +310,9 @@ func (c *VMByteCode) inNewScope(typ scopeType, f func()) {
 	c.scope = &scope{
 		parentScope:  c.scope,
 		offset:       c.scope.offset,
-		varAddresses: map[any]int{},
+		varAddresses: map[any]ptr{},
 		closure: &scope{
-			varAddresses: map[any]int{},
+			varAddresses: map[any]ptr{},
 		},
 		scopeType: typ,
 	}
@@ -313,7 +323,7 @@ func (c *VMByteCode) inNewScope(typ scopeType, f func()) {
 }
 
 func (c *VMByteCode) debug(msg string, args ...any) {
-	c.debugInfo[len(c.definedFunctions)+c.pos()] = fmt.Sprintf(msg, args...)
+	c.debugInfo[len(c.definedFunctions)+int(c.pos())] = fmt.Sprintf(msg, args...)
 }
 
 func emit(node any, cur *VMByteCode) {
@@ -402,23 +412,23 @@ func variableParts(s string) []string {
 func emitAnd(cc *cons, cur *VMByteCode) {
 	l := consToList(cc)
 	andExpressions := l[1:]
-	var indexes []int
+	var indexes []ptr
 	for _, o := range andExpressions {
 		emit(o, cur)
-		var i int
+		var i ptr
 		cur.writeOpCode(opBr).iptr(&i).b(emptyAddr...)
 
 		indexes = append(indexes, i)
 	}
-	var jmpAddr, falsePos int
+	var jmpAddr, falsePos ptr
 	cur.writeOpCode(opPush).writeConstAddr(boolTrue).
 		writeOpCode(opJmp).iptr(&jmpAddr).writeEmptyAddress().
 		iptr(&falsePos).writeOpCode(opPush).writeConstAddr(boolFalse)
 
-	cur.modify(jmpAddr, addr(cur.pos()))
+	cur.modify(jmpAddr, makeByteUint(cur.pos()))
 
 	for _, i := range indexes {
-		cur.modify(i, addr(falsePos))
+		cur.modify(i, makeByteUint(falsePos))
 	}
 }
 
@@ -432,24 +442,24 @@ func emitOr(cc *cons, cur *VMByteCode) {
 	l := consToList(cc)
 
 	boolExpressions := l[1:]
-	var indexes []int
+	var indexes []ptr
 	for _, e := range boolExpressions {
 		emit(e, cur)
-		var i, next int
+		var i, next ptr
 		cur.writeOpCode(opBr).iptr(&next).writeEmptyAddress()
 		cur.writeOpCode(opJmp).iptr(&i).writeEmptyAddress()
-		cur.modify(next, addr(cur.pos()))
+		cur.modify(next, makeByteUint(cur.pos()))
 		indexes = append(indexes, i)
 	}
 
-	var truePos, lastJump int
+	var truePos, lastJump ptr
 	cur.writeOpCode(opPush).writeConstAddr(boolFalse)
 	cur.writeOpCode(opJmp).iptr(&lastJump).writeEmptyAddress()
 	cur.iptr(&truePos).writeOpCode(opPush).writeConstAddr(boolTrue)
 
-	cur.modify(lastJump, addr(cur.pos()))
+	cur.modify(lastJump, makeByteUint(cur.pos()))
 	for _, i := range indexes {
-		cur.modify(i, addr(truePos))
+		cur.modify(i, makeByteUint(truePos))
 	}
 }
 
@@ -498,7 +508,7 @@ func emitDefineFunction(cc *cons, cur *VMByteCode) {
 	})
 }
 
-func emitFunction(name string, expr SExpressions, cur *VMByteCode) int {
+func emitFunction(name string, expr SExpressions, cur *VMByteCode) ptr {
 	cur.scope.offset = callFrameOffset + 1 // skip stack entries stored by CALL opcode
 
 	cur.debug("define function %s", name)
@@ -506,7 +516,7 @@ func emitFunction(name string, expr SExpressions, cur *VMByteCode) int {
 
 	args := consToList(expr[0].(*cons))
 	for i, a := range args {
-		cur.scope.storeAddr(a.(literal).value, addrShiftLeftFlag|i) // grow to stack bottom from base pointer
+		cur.scope.storeAddr(a.(literal).value, offsetAddress(-i)) // grow to stack bottom from base pointer
 	}
 
 	for _, e := range expr[1:] {
@@ -514,7 +524,7 @@ func emitFunction(name string, expr SExpressions, cur *VMByteCode) int {
 	}
 
 	emitReturn(name, len(args), cur)
-	return len(args)
+	return ptr(len(args))
 }
 
 func emitReturn(curFunctionName string, n int, cur *VMByteCode) {
@@ -535,7 +545,7 @@ func emitReturn(curFunctionName string, n int, cur *VMByteCode) {
 
 	cur.code = cur.code[:len(cur.code)-opCallOffset]
 
-	var retIndex, jumpPrepareIndex int
+	var retIndex, jumpPrepareIndex ptr
 
 	cur.writeOpCode(opJmp).iptr(&jumpPrepareIndex).writeEmptyAddress()
 
@@ -544,14 +554,14 @@ func emitReturn(curFunctionName string, n int, cur *VMByteCode) {
 	}
 	cur.writeOpCode(opJmp).iptr(&retIndex).writeEmptyAddress()
 
-	cur.modify(jumpPrepareIndex, addr(cur.pos()))
+	cur.modify(jumpPrepareIndex, makeByteUint(cur.pos()))
 	for i := 0; i < n; i++ {
-		cur.writeOpCode(opStore).writeAddr(addrShiftLeftFlag | i)
+		cur.writeOpCode(opStore).writePointer(offsetAddress(-i))
 	}
-	cur.writeOpCode(opJmp).b(labelAddr...)
+	cur.writeOpCode(opJmp).writeAddress(labelAddr)
 	cur.debug("end define function %s", curFunctionName)
 	cur.writeOpCode(opRet)
-	cur.modify(retIndex, addr(cur.pos()-1))
+	cur.modify(retIndex, makeByteUint(cur.pos()-1))
 }
 
 func emitCallFunction(cc *cons, cur *VMByteCode) {
@@ -563,9 +573,9 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 
 	extFunc, ok := cur.externalFunctions[args[0].(literal).value]
 	if ok {
-		cur.writeOpCode(opPush).b(cur.constAddr(extFunc)...)
+		cur.writeOpCode(opPush).writeAddress(cur.constAddr(extFunc))
 		cur.debug("call external function %s", args[0].(literal).value)
-		cur.writeOpCode(opExtCall).b(addr(nargs)...)
+		cur.writeOpCode(opExtCall).writePointer(ptr(nargs))
 		return
 	}
 
@@ -573,13 +583,13 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 	fVariable, _, hasVariable := cur.scope.resolveAddress(functionName)
 	if hasVariable {
 		cur.debug("call closure %s", functionName)
-		cur.writeOpCode(opClosureCall).b(fVariable...).b(addr(nargs)...)
+		cur.writeOpCode(opClosureCall).writeAddress(fVariable).writePointer(ptr(nargs))
 		return
 	}
 
 	fAddress, hasLabel := cur.findLabelAddress(functionName)
 	if hasLabel {
-		cur.writeOpCode(opCall).b(fAddress...).b(addr(nargs)...)
+		cur.writeOpCode(opCall).writeAddress(fAddress).writePointer(ptr(nargs))
 		cur.debug("call function %s", functionName)
 		return
 	}
@@ -594,7 +604,7 @@ func emitIf(cc *cons, cur *VMByteCode) {
 
 	emit(condition, cur)
 
-	var elseStart, elseEnd int
+	var elseStart, elseEnd ptr
 
 	cur.writeOpCode(opBr).iptr(&elseStart).writeEmptyAddress()
 
@@ -602,11 +612,11 @@ func emitIf(cc *cons, cur *VMByteCode) {
 	if len(l) > 3 { // with else
 		cur.writeOpCode(opJmp).iptr(&elseEnd).writeEmptyAddress()
 	}
-	cur.modify(elseStart, addr(cur.pos()))
+	cur.modify(elseStart, makeByteUint(cur.pos()))
 	if len(l) > 3 { // with else
 		elseBlock := l[3]
 		emit(elseBlock, cur)
-		cur.modify(elseEnd, addr(cur.pos()))
+		cur.modify(elseEnd, makeByteUint(cur.pos()))
 	}
 }
 
@@ -624,11 +634,11 @@ func emitSetq(cc *cons, cur *VMByteCode) {
 
 	switch vt {
 	case valTypeClosure:
-		cur.writeOpCode(opStoreClosureVal).b(addr...)
-		cur.writeOpCode(opPushClosureVal).b(addr...)
+		cur.writeOpCode(opStoreClosureVal).writeAddress(addr)
+		cur.writeOpCode(opPushClosureVal).writeAddress(addr)
 	case valTypeLocal:
-		cur.writeOpCode(opStore).b(addr...)
-		cur.writeOpCode(opPush).b(addr...)
+		cur.writeOpCode(opStore).writeAddress(addr)
+		cur.writeOpCode(opPush).writeAddress(addr)
 	default:
 		errorx.Panic(errorx.IllegalArgument.New("unknown value type %d", valTypeLocal))
 	}
@@ -636,7 +646,7 @@ func emitSetq(cc *cons, cur *VMByteCode) {
 
 func emitList(cc *cons, cur *VMByteCode) {
 	l := consToList(cc)
-	cur.writeOpCode(opPush).b(cur.constAddr(nil)...)
+	cur.writeOpCode(opPush).writeAddress(cur.constAddr(nil))
 
 	for i := len(l) - 1; i >= 1; i-- {
 		emit(l[i], cur)
@@ -656,26 +666,26 @@ func emitDoList(cc *cons, cur *VMByteCode) {
 
 		ad := cur.scope.createNextAddr(loopVar.(literal).value)
 
-		var begin int
+		var begin ptr
 		cur.iptr(&begin)
-		cur.writeOpCode(opPush).b(ad...)
+		cur.writeOpCode(opPush).writeAddress(ad)
 		cur.writeOpCode(opNil)
 		cur.writeOpCode(opNot)
-		var end int
+		var end ptr
 		cur.writeOpCode(opBr).iptr(&end).b(emptyAddr...)
-		cur.writeOpCode(opPush).b(ad...)
-		cur.writeOpCode(opPush).b(ad...)
+		cur.writeOpCode(opPush).writeAddress(ad)
+		cur.writeOpCode(opPush).writeAddress(ad)
 		cur.writeOpCode(opCar)
-		cur.writeOpCode(opStore).b(ad...)
+		cur.writeOpCode(opStore).writeAddress(ad)
 
 		for _, e := range body {
 			emit(e, cur)
 		}
 		cur.writeOpCode(opPop)
 		cur.writeOpCode(opCdr)
-		cur.writeOpCode(opStore).b(ad...)
-		cur.writeOpCode(opJmp).writeAddr(begin)
-		cur.modify(end, addr(cur.pos()))
+		cur.writeOpCode(opStore).writeAddress(ad)
+		cur.writeOpCode(opJmp).writePointer(begin)
+		cur.modify(end, makeByteUint(cur.pos()))
 	})
 }
 
@@ -732,7 +742,7 @@ func emitDefineMacros(cc *cons, cur *VMByteCode) {
 		cur.scope = &stashedFrame
 	}()
 	for i, a := range args {
-		cur.scope.storeAddr(a.(literal).value, addrShiftLeftFlag|i)
+		cur.scope.storeAddr(a.(literal).value, offsetAddress(-i))
 		m.args = append(m.args, a.(literal).value)
 	}
 	for _, b := range body {
@@ -773,7 +783,7 @@ func emitQuote(v any, cur *VMByteCode) {
 }
 
 type closure struct {
-	addr   int
+	addr   ptr
 	nargs  int
 	values []*any
 }
@@ -782,8 +792,8 @@ func emitLambda(v *cons, cur *VMByteCode) {
 	labelID := cur.newLabelID()
 
 	l := consToList(v)
-	var endLambdaAddress int
-	var startDefinitionAddress int
+	var endLambdaAddress ptr
+	var startDefinitionAddress ptr
 
 	cur.writeOpCode(opJmp).iptr(&endLambdaAddress).writeEmptyAddress().iptr(&startDefinitionAddress)
 
@@ -791,28 +801,38 @@ func emitLambda(v *cons, cur *VMByteCode) {
 		nargs := emitFunction(labelID, l[1:], cur)
 
 		funcDefinitionLength := cur.pos() - startDefinitionAddress
-		cur.modify(endLambdaAddress, addr(addrShiftRightFlag|funcDefinitionLength))
+		cur.modify(endLambdaAddress, makeByteUint(offsetAddress(int(funcDefinitionLength))))
 		cur.debug("label %s", labelID)
 
-		var addresses [][]byte
 		cur.writeOpCode(opPushClosure).
-			writeAddr(addrShiftLeftFlag | funcDefinitionLength + 3 /*opcode + address */).
-			writeAddr(nargs) // lambda arguments count
-		for v, _ := range cur.scope.closure.varAddresses {
-			a, ok := cur.scope.findLocalAddress(v)
+			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
+			writePointer(nargs) // lambda arguments count
+
+		type closureVar struct {
+			stackAddr  btUint
+			vt         valType
+			closurePtr ptr
+		}
+		var localAddresses []closureVar
+		for v, closureValPtr := range cur.scope.closure.varAddresses {
+			localAddress, vt, ok := cur.scope.parentScope.findLocalAddress(v)
 			if !ok {
 				errorx.Panic(errorx.IllegalState.New("closure variable must exists in local variables in parent scope"))
 			}
-			addresses = append(addresses, a)
+			localAddresses = append(localAddresses, closureVar{localAddress, vt, closureValPtr})
 		}
+
+		sort.Slice(localAddresses, func(i, j int) bool {
+			return localAddresses[i].closurePtr < localAddresses[j].closurePtr
+		})
 
 		// write closure variables count
-		cur.b(addr(len(addresses))...)
-		for _, a := range addresses {
-			cur.b(a...)
+		cur.writeInt(len(localAddresses))
+		for _, a := range localAddresses {
+			cur.b(byte(a.vt))
+			cur.writeAddress(a.stackAddr)
 		}
 	})
-
 }
 
 func emitProgn(v *cons, cur *VMByteCode) {
@@ -832,7 +852,7 @@ func emitWhile(v *cons, cur *VMByteCode) {
 	l := consToList(v)
 	condition := l[1]
 	body := l[2:]
-	var checkConditionPtr, breakAddress int
+	var checkConditionPtr, breakAddress ptr
 
 	checkConditionPtr = cur.pos()
 	emit(condition, cur)
@@ -840,8 +860,8 @@ func emitWhile(v *cons, cur *VMByteCode) {
 	for _, b := range body {
 		emit(b, cur)
 	}
-	cur.writeOpCode(opJmp).writeAddr(checkConditionPtr)
-	cur.modify(breakAddress, addr(cur.pos()))
+	cur.writeOpCode(opJmp).writePointer(checkConditionPtr)
+	cur.modify(breakAddress, makeByteUint(cur.pos()))
 }
 
 func emitLiteral(v literal, cur *VMByteCode) {
@@ -856,12 +876,12 @@ func emitLiteral(v literal, cur *VMByteCode) {
 	}
 	switch vt {
 	case valTypeClosure:
-		cur.writeOpCode(opPushClosureVal).b(addr...)
+		cur.writeOpCode(opPushClosureVal).writeAddress(addr)
 	case valTypeLocal, valTypeConst:
 		if len(parts) == 1 {
-			cur.writeOpCode(opPush).b(addr...)
+			cur.writeOpCode(opPush).writeAddress(addr)
 		} else {
-			cur.writeOpCode(opPushField).b(addr...).writeConstAddr(strings.Join(parts[1:], "."))
+			cur.writeOpCode(opPushField).writeAddress(addr).writeConstAddr(strings.Join(parts[1:], "."))
 		}
 	default:
 		errorx.Panic(errorx.IllegalArgument.New("unknown value type '%d'", vt))

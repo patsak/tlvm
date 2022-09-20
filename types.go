@@ -77,3 +77,35 @@ func (c *cons) String() string {
 	}
 	return "(" + strings.Join(res, " ") + ")"
 }
+
+type btUint [2]byte
+
+type ptr int
+
+func offsetAddress(offset int) ptr {
+	if offset < 0 {
+		return ptr(int(addrShiftLeftFlag) | -offset)
+	} else {
+		return ptr(int(addrShiftRightFlag) | offset)
+	}
+}
+
+func (p ptr) format(basePointerName string) string {
+	if addrShiftLeftFlag&p > 0 {
+		return fmt.Sprintf("%s-%d", basePointerName, p&^addrShiftLeftFlag)
+	} else if addrShiftRightFlag&p > 0 {
+		return fmt.Sprintf("%s+%d", basePointerName, p&^addrShiftRightFlag)
+	} else {
+		return fmt.Sprintf("%d", p)
+	}
+}
+
+func (p ptr) abs(base int) ptr {
+	if addrShiftLeftFlag&p > 0 {
+		return ptr(base) - p&^addrShiftLeftFlag
+	} else if addrShiftRightFlag&p > 0 {
+		return ptr(base) + p&^addrShiftRightFlag
+	} else {
+		return p
+	}
+}

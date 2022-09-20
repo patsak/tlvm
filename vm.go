@@ -13,7 +13,6 @@ import (
 
 var (
 	errRawTextPositionProperty = errorx.RegisterProperty("rawTextPosition")
-	errVMInstructionProperty   = errorx.RegisterProperty("vmInstruction")
 )
 
 type opCode byte
@@ -40,7 +39,6 @@ const (
 	opClosureCall
 	opExtCall
 	opRet
-	opRetClosure
 	opHalt
 	opCons
 	opCar
@@ -59,8 +57,8 @@ const (
 	cmpFlagEq          byte = 1 << 0
 	cmpFlagGt          byte = 1 << 1
 	cmpFlagLt          byte = 1 << 2
-	addrShiftRightFlag int  = 1 << 15
-	addrShiftLeftFlag  int  = 1 << 14
+	addrShiftRightFlag ptr  = 1 << 15
+	addrShiftLeftFlag  ptr  = 1 << 14
 )
 
 type vm struct {
@@ -71,7 +69,7 @@ type vm struct {
 	bp                          int            // base pointer
 	sp                          int            // stack pointer
 	ip                          int            // instruction pointer
-	env                         map[any]int    // environment variables pointers
+	env                         map[any]ptr    // environment variables pointers
 	debugInfo                   map[int]string // debug string by instruction position
 	originalTextPositionPointer map[int]int    // position in original code text by instruction position
 }
@@ -121,10 +119,11 @@ func (v *vm) CodeString() string {
 			b.WriteString(fmt.Sprintf("PUSH %s", v.strStackAddr()))
 		case opPushClosure:
 			b.WriteString(fmt.Sprintf("PUSHCLOSURE %s", v.strIpAddr()))
-			nargs := v.arg()
-			nclosurevals := v.arg()
+			nargs := v.readInt()
+			nclosurevals := v.readInt()
 			b.WriteString(fmt.Sprintf(", %d args, %d closures:", nargs, nclosurevals))
 			for i := 0; i < nclosurevals; i++ {
+				b.WriteString(fmt.Sprintf(" %d", v.next()))
 				b.WriteString(fmt.Sprintf(" %s", v.strStackAddr()))
 			}
 		case opPushField:
@@ -140,7 +139,7 @@ func (v *vm) CodeString() string {
 		case opAdd:
 			b.WriteString(fmt.Sprintf("ADD"))
 		case opSub:
-			b.WriteString(fmt.Sprintf("ADD"))
+			b.WriteString(fmt.Sprintf("SUB"))
 		case opCmp:
 			b.WriteString(fmt.Sprintf("CMP %d", v.next()))
 		case opCmpBool:
@@ -264,16 +263,25 @@ func (v *vm) Execute() (errRes error) {
 			*ptr = vv
 		case opPushClosure:
 			ip := v.ipAddrArg()
-			n := v.arg()
-			nClosureVars := v.arg()
+			n := v.readPtr()
+			nClosureVars := v.readInt()
 			var closureVars []*any
 			for i := 0; i < nClosureVars; i++ {
-				pos := v.stackAddrArg()
-				vv := v.stack[pos]
-				closureVars = append(closureVars, &vv)
+				vt := valType(v.next())
+				varPtr := v.readPtr()
+				var vv any
+				switch vt {
+				case valTypeClosure:
+					closureVars = append(closureVars, v.closure()[varPtr.abs(0)])
+				case valTypeLocal:
+					vv = v.stack[varPtr.abs(v.bp)]
+					closureVars = append(closureVars, &vv)
+				default:
+					errorx.Panic(errorx.IllegalState.New("unexpected value type %d in closure", vt))
+				}
 			}
 
-			v.push(&closure{ip, n, closureVars})
+			v.push(&closure{ip, int(n), closureVars})
 		case opPushField:
 			variableAddr := v.stackAddrArg()
 			fieldPathAddr := v.stackAddrArg()
@@ -366,7 +374,7 @@ func (v *vm) Execute() (errRes error) {
 			v.push(v.pop() == nil)
 		case opBr:
 			v1 := v.pop().(bool)
-			addr := v.arg()
+			addr := v.readPtr()
 			if !v1 {
 				v.goTo(addr)
 			}
@@ -374,9 +382,9 @@ func (v *vm) Execute() (errRes error) {
 			v.pop()
 		case opExtCall:
 			fn := v.pop().(reflect.Value)
-			nargs := v.arg()
+			nargs := v.readInt()
 			var args []reflect.Value
-			for i := 0; i < int(nargs); i++ {
+			for i := 0; i < nargs; i++ {
 				args = append(args, reflect.ValueOf(v.pop()))
 			}
 			values := fn.Call(args)
@@ -384,7 +392,7 @@ func (v *vm) Execute() (errRes error) {
 		case opClosureCall:
 			a := v.stackAddrArg()
 			cl := v.stack[a].(*closure)
-			nargs := v.arg()
+			nargs := v.readInt()
 			if nargs != cl.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
 			}
@@ -396,8 +404,8 @@ func (v *vm) Execute() (errRes error) {
 			v.bp = v.sp - callFrameOffset
 			v.goTo(addr)
 		case opCall:
-			addr := v.arg()
-			nargs := v.arg()
+			addr := v.readPtr()
+			nargs := v.readInt()
 			v.push(nargs)
 			v.push(nil)
 			v.push(v.bp)
@@ -414,7 +422,7 @@ func (v *vm) Execute() (errRes error) {
 			v.sp -= nargs
 			v.push(result)
 		case opJmp:
-			v.goTo(v.arg())
+			v.goTo(v.readPtr())
 		case opNot:
 			v.push(!v.pop().(bool))
 		case opCons:
@@ -442,51 +450,38 @@ func (v *vm) Execute() (errRes error) {
 	return nil
 }
 
-func (v *vm) arg() int {
+func (v *vm) readPtr() ptr {
 	res := binary.BigEndian.Uint16(v.code[v.ip : v.ip+2])
 	v.ip += 2
-	return int(res)
+	return ptr(res)
 }
 
-func (v *vm) stackAddrArg() int {
-	return v.addrFromArg(v.bp, v.arg())
+func (v *vm) readInt() int {
+	return int(v.readPtr())
 }
 
-func (v *vm) closureAddr() int {
-	return v.addrFromArg(0, v.arg())
+func (v *vm) stackAddrArg() ptr {
+	return v.readPtr().abs(v.bp)
+}
+
+func (v *vm) closureAddr() ptr {
+	return v.readPtr().abs(0)
 }
 
 func (v *vm) closure() []*any {
 	return v.stack[v.bp+2].([]*any)
 }
 
-func (v *vm) ipAddrArg() int {
-	return v.addrFromArg(v.ip, v.arg())
+func (v *vm) ipAddrArg() ptr {
+	return v.readPtr().abs(v.ip)
 }
 
 func (v *vm) strStackAddr() string {
-	a := int(v.arg())
-	if addrShiftLeftFlag&a > 0 {
-		return fmt.Sprintf("bp-%d", a&^addrShiftLeftFlag)
-	} else if addrShiftRightFlag&a > 0 {
-		return fmt.Sprintf("bp+%d", a&^addrShiftRightFlag)
-	} else {
-		return fmt.Sprintf("%d", a)
-	}
+	return v.readPtr().format("bp")
 }
 
 func (v *vm) strIpAddr() string {
-	return fmt.Sprintf("%d", v.addrFromArg(v.ip, v.arg()))
-}
-
-func (v *vm) addrFromArg(base int, arg int) int {
-	if addrShiftLeftFlag&arg > 0 {
-		return base - arg&^addrShiftLeftFlag
-	} else if addrShiftRightFlag&arg > 0 {
-		return base + arg&^addrShiftRightFlag
-	} else {
-		return arg
-	}
+	return fmt.Sprintf("%d", v.readPtr().abs(v.ip))
 }
 
 func (v *vm) next() byte {
@@ -506,14 +501,8 @@ func (v *vm) push(b any) {
 	v.stack[v.sp] = b
 }
 
-func (v *vm) goTo(addr int) {
-	if addrShiftRightFlag&addr > 0 {
-		v.ip += addr &^ addrShiftRightFlag
-	} else if addrShiftLeftFlag&addr > 0 {
-		v.ip -= addr &^ addrShiftLeftFlag
-	} else {
-		v.ip = addr
-	}
+func (v *vm) goTo(p ptr) {
+	v.ip = int(p.abs(v.ip))
 }
 
 func cmp[T constraints.Ordered](v1, v2 T, chFl byte) bool {

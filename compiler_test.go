@@ -124,6 +124,34 @@ func TestCommonOperators(t *testing.T) {
 			result: 35,
 		},
 		{
+			name: "closureMultipleArgs",
+			code: `
+(defun inc (n acc) 
+	(lambda (v) 
+		(setq acc (+ acc n v))))
+(setq plus (inc 15 10))
+(plus 10)
+(plus 15)
+`,
+			result: 65,
+		},
+		{
+			name: "closureInternalLambdas",
+			code: `
+(defun inc (acc)
+  (lambda (n)
+    (lambda (v)
+      (setq acc (+ acc n v)))))
+(setq base (inc 10))
+(setq plus15 (base 15))
+(setq plus10 (base 10))
+(plus10 10) ; 0 + 10 + 10 = 20
+(plus15 10) ; 20 + 15 + 10 = 45
+(plus15 15) ; 45 + 15 + 15 = 75
+`,
+			result: 85,
+		},
+		{
 			name: "externalFunction",
 			code: `(match "[a-z]+" "aaa")`,
 			options: []CompileOption{ExtFunctionsOrPanic(map[string]any{
@@ -144,7 +172,6 @@ func TestCommonOperators(t *testing.T) {
 			require.NoError(t, err)
 
 			vm := NewVM(vmCode)
-			fmt.Printf(vm.CodeString())
 			require.NoError(t, vm.Execute(), tc.code)
 			switch vm.Result().(type) {
 			case *cons:

@@ -19,6 +19,9 @@ func Read(sourceCode string) (SExpressions, error) {
 		if err != nil {
 			return nil, err
 		}
+		if r == nil {
+			continue
+		}
 		res = append(res, r)
 	}
 	return res, nil
