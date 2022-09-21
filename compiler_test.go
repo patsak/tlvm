@@ -138,18 +138,19 @@ func TestCommonOperators(t *testing.T) {
 		{
 			name: "closureInternalLambdas",
 			code: `
-(defun inc (acc)
+(defun inc (acc in)
   (lambda (n)
+    (setq acc (+ acc in n))
     (lambda (v)
       (setq acc (+ acc n v)))))
-(setq base (inc 10))
-(setq plus15 (base 15))
-(setq plus10 (base 10))
-(plus10 10) ; 0 + 10 + 10 = 20
-(plus15 10) ; 20 + 15 + 10 = 45
-(plus15 15) ; 45 + 15 + 15 = 75
+(setq base (inc 1 1)) 
+(setq plus1 (base 1)) ; 1 + 1 + 1 = 3
+(setq plus2 (base 2)) ; 3 + 1 + 2 = 6 
+(plus1 1) ; 6 + 1 + 1 = 8
+(plus2 1) ; 8 + 2 + 1 = 11
+(plus2 2) ; 11 + 2 + 2 = 15
 `,
-			result: 85,
+			result: 15,
 		},
 		{
 			name: "externalFunction",

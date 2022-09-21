@@ -216,8 +216,11 @@ func (c *scope) resolveAddress(v any) (btUint, valType, bool) {
 		}
 		if s.parentScope != nil {
 			res, vt, ok := findAddr(s.parentScope)
-			if ok && vt == valTypeClosure && s.scopeType == scopeTypeStackFrame { // close variable
-				s.closure.createNextAddr(v)
+
+			if ok && vt == valTypeClosure && s.scopeType == scopeTypeStackFrame { // close variable in parent stack frames
+				if _, _, ok := s.findLocalAddress(v); !ok {
+					s.closure.createNextAddr(v)
+				}
 			}
 			return res, vt, ok
 		}
