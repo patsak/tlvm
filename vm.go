@@ -38,6 +38,7 @@ const (
 	opCall
 	opClosureCall
 	opExtCall
+	opPopCall
 	opRet
 	opHalt
 	opCons
@@ -120,8 +121,9 @@ func (v *vm) CodeString() string {
 		case opPushClosure:
 			b.WriteString(fmt.Sprintf("PUSHCLOSURE %s", v.strIpAddr()))
 			nargs := v.readInt()
+			rest := v.readBool()
 			nclosurevals := v.readInt()
-			b.WriteString(fmt.Sprintf(", %d args, %d closures:", nargs, nclosurevals))
+			b.WriteString(fmt.Sprintf(", %d args, %t &rest, %d closures:", nargs, rest, nclosurevals))
 			for i := 0; i < nclosurevals; i++ {
 				b.WriteString(fmt.Sprintf(" %d", v.next()))
 				b.WriteString(fmt.Sprintf(" %s", v.strStackAddr()))
@@ -152,6 +154,8 @@ func (v *vm) CodeString() string {
 			b.WriteString(fmt.Sprintf("DIV"))
 		case opCall:
 			b.WriteString(fmt.Sprintf("CALL %d %d", v.stackAddrArg(), v.stackAddrArg()))
+		case opPopCall:
+			b.WriteString(fmt.Sprintf("POPCALL %s", v.strIpAddr()))
 		case opExtCall:
 			b.WriteString(fmt.Sprintf("EXTCALL %d", v.stackAddrArg()))
 		case opRet:
@@ -263,7 +267,9 @@ func (v *vm) Execute() (errRes error) {
 			*ptr = vv
 		case opPushClosure:
 			ip := v.ipAddrArg()
-			n := v.readPtr()
+			n := v.readInt()
+			rest := v.readBool()
+
 			nClosureVars := v.readInt()
 			var closureVars []*any
 			for i := 0; i < nClosureVars; i++ {
@@ -281,7 +287,7 @@ func (v *vm) Execute() (errRes error) {
 				}
 			}
 
-			v.push(&closure{ip, int(n), closureVars})
+			v.push(&closure{addr: ip, nargs: n, rest: rest, values: closureVars})
 		case opPushField:
 			variableAddr := v.stackAddrArg()
 			fieldPathAddr := v.stackAddrArg()
@@ -396,6 +402,38 @@ func (v *vm) Execute() (errRes error) {
 			if nargs != cl.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
 			}
+			var prev any
+			prev = nil
+			for i := 0; i < nargs-cl.nargs+1; i++ {
+				c := &cons{}
+				c.second = prev
+				c.first = v.pop()
+				prev = c
+			}
+			addr := cl.addr
+			v.push(cl.nargs)
+			v.push(cl.values)
+			v.push(v.bp)
+			v.push(v.ip)
+			v.bp = v.sp - callFrameOffset
+			v.goTo(addr)
+		case opPopCall:
+			cl := v.pop().(*closure)
+			nargs := v.readInt()
+
+			if !cl.rest && nargs != cl.nargs ||
+				cl.rest && nargs < cl.nargs {
+				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
+			}
+			var prev any
+			prev = nil
+			for i := 0; i < nargs-cl.nargs+1; i++ {
+				c := &cons{}
+				c.second = prev
+				c.first = v.pop()
+				prev = c
+			}
+			v.push(prev)
 			addr := cl.addr
 			v.push(cl.nargs)
 			v.push(cl.values)
@@ -458,6 +496,10 @@ func (v *vm) readPtr() ptr {
 
 func (v *vm) readInt() int {
 	return int(v.readPtr())
+}
+
+func (v *vm) readBool() bool {
+	return v.next() > 0
 }
 
 func (v *vm) stackAddrArg() ptr {

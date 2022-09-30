@@ -167,12 +167,28 @@ func TestCommonOperators(t *testing.T) {
 			code:   `(setq i 0) (setq acc 0) (while (lt i 5) (setq acc (+ acc i)) (setq i (+ i 1))) acc`,
 			result: 0 + 1 + 2 + 3 + 4,
 		},
+		{
+			name:   "lambdaAsFirstElement",
+			code:   `((lambda (a) (+ a 1)) 1)`,
+			result: 2,
+		},
+		{
+			name:   "rest",
+			code:   `((lambda (a &rest b) b) 1 2 3)`,
+			result: "(2 3)",
+		},
+		{
+			name:   "restArg",
+			code:   `((lambda (a &rest b) b) 1 2 3)`,
+			result: "(2 3)",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vmCode, err := Compile(tc.code, tc.options...)
 			require.NoError(t, err)
 
 			vm := NewVM(vmCode)
+			fmt.Printf("%s\n", vm.CodeString())
 			require.NoError(t, vm.Execute(), tc.code)
 			switch vm.Result().(type) {
 			case *cons:
