@@ -46,8 +46,9 @@ type scope struct {
 var emptyAddr = []byte{0, 0}
 
 type macros struct {
-	args []string
-	code []byte
+	code  []byte
+	rest  bool
+	nargs int
 }
 
 type CompileOption func(bt *VMByteCode)
@@ -628,7 +629,7 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 }
 
 func emitArgs(args SExpressions, cur *VMByteCode) int {
-	for i := len(args) - 1; i >= 0; i-- {
+	for i := range args {
 		emit(args[i], cur)
 	}
 
@@ -749,10 +750,27 @@ func expandMacros(expr *cons, cur *VMByteCode) any {
 	name := l[0].(literal).value
 	args := l[1:]
 	macros := cur.macrosByName[name]
+	if macros.rest && len(args) < macros.nargs {
+		errorx.Panic(errorx.IllegalArgument.New("number of arguments for macros %s must be greater than %d", name, macros.nargs))
+	}
+	if !macros.rest && len(args) != macros.nargs {
+		errorx.Panic(errorx.IllegalArgument.New("number of arguments for macros %s must be equal to %d", name, macros.nargs))
+	}
 	vm.ip = len(vm.code)
 	vm.code = append(vm.code, macros.code...)
+	if macros.rest {
+		restArgs := args[macros.nargs-1:]
+		c := &cons{first: restArgs[0]}
+		for i := 1; i < len(restArgs); i++ {
+			next := &cons{first: restArgs[i]}
+			c.second = next
+			c = next
+		}
+		args[macros.nargs-1] = c
+		args = args[:macros.nargs]
+	}
 	for i := range args { // push arguments in reverse order for stack
-		vm.push(args[len(args)-i-1])
+		vm.push(args[i])
 	}
 	vm.bp = vm.sp // prepare base pointer
 	if err := vm.Execute(); err != nil {
@@ -778,15 +796,31 @@ func emitDefineMacros(cc *cons, cur *VMByteCode) {
 		cur.code = code
 		cur.scope = &stashedFrame
 	}()
+
+	var restArg bool
+	var actualArgs SExpressions
 	for i, a := range args {
-		cur.scope.storeAddr(a.(literal).value, offsetAddress(-i))
-		m.args = append(m.args, a.(literal).value)
+		v := a.(literal).value
+		if v == "&rest" {
+			restArg = true
+			actualArgs = append(actualArgs, args[i+1])
+			break
+		}
+		actualArgs = append(actualArgs, args[i])
 	}
+
+	for i, a := range actualArgs {
+		v := a.(literal).value
+		cur.scope.storeAddr(v, offsetAddress(-(len(actualArgs) - i - 1))) // grow to stack bottom from base pointer
+	}
+
 	for _, b := range body {
 		emit(b, cur)
 	}
 
 	m.code = make([]byte, len(cur.code[lastInstruction:]))
+	m.rest = restArg
+	m.nargs = len(actualArgs)
 	copy(m.code, cur.code[lastInstruction:])
 	cur.macrosByName[name] = m
 }
@@ -981,3 +1015,8 @@ func wrapCompilationError(err error, rawText string) error {
 
 	return errorx.Decorate(err, "Code: %s", rawText[lineStart:posInt]+"^"+rawText[posInt:lineEnd])
 }
+
+var forRangeMacro = `
+(defmacro forRange (i from to &rest body) 
+` + "`(progn (setq ,i ,from) (while (lt ,i ,to) ,@body)))" + `
+`

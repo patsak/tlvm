@@ -46,6 +46,7 @@ const (
 	opCdr
 	opNil
 	opPrint
+	opDup
 	opNoOp
 )
 
@@ -176,6 +177,8 @@ func (v *vm) CodeString() string {
 			b.WriteString("CDR")
 		case opPrint:
 			b.WriteString("PRINT")
+		case opDup:
+			b.WriteString("DUP")
 		case opNoOp:
 			b.WriteString("NOOP")
 		case opHalt:
@@ -389,9 +392,9 @@ func (v *vm) Execute() (errRes error) {
 		case opExtCall:
 			fn := v.pop().(reflect.Value)
 			nargs := v.readInt()
-			var args []reflect.Value
+			args := make([]reflect.Value, nargs)
 			for i := 0; i < nargs; i++ {
-				args = append(args, reflect.ValueOf(v.pop()))
+				args[nargs-i-1] = reflect.ValueOf(v.pop())
 			}
 			values := fn.Call(args)
 			v.push(values[0].Interface())
@@ -402,14 +405,8 @@ func (v *vm) Execute() (errRes error) {
 			if nargs != cl.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
 			}
-			var prev any
-			prev = nil
-			for i := 0; i < nargs-cl.nargs+1; i++ {
-				c := &cons{}
-				c.second = prev
-				c.first = v.pop()
-				prev = c
-			}
+			v.pushRestArgIfNeeded(nargs, cl)
+
 			addr := cl.addr
 			v.push(cl.nargs)
 			v.push(cl.values)
@@ -425,15 +422,7 @@ func (v *vm) Execute() (errRes error) {
 				cl.rest && nargs < cl.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
 			}
-			var prev any
-			prev = nil
-			for i := 0; i < nargs-cl.nargs+1; i++ {
-				c := &cons{}
-				c.second = prev
-				c.first = v.pop()
-				prev = c
-			}
-			v.push(prev)
+			v.pushRestArgIfNeeded(nargs, cl)
 			addr := cl.addr
 			v.push(cl.nargs)
 			v.push(cl.values)
@@ -452,7 +441,7 @@ func (v *vm) Execute() (errRes error) {
 			v.goTo(addr)
 		case opRet:
 			result := v.pop()
-			v.sp = v.bp + 4
+			v.sp = v.bp + callFrameOffset
 			v.ip = v.pop().(int)
 			v.bp = v.pop().(int)
 			v.pop() // skip closure values
@@ -479,6 +468,8 @@ func (v *vm) Execute() (errRes error) {
 		case opPrint:
 			c := v.pop()
 			fmt.Printf("%v\n", c)
+		case opDup:
+			v.push(v.stack[v.sp])
 		case opNoOp:
 		case opHalt:
 			return
@@ -486,6 +477,22 @@ func (v *vm) Execute() (errRes error) {
 	}
 
 	return nil
+}
+
+func (v *vm) pushRestArgIfNeeded(nargs int, cl *closure) {
+	if !cl.rest {
+		return
+	}
+	var prev any
+	prev = nil
+	for i := 0; i < nargs-cl.nargs+1; i++ {
+		c := &cons{}
+		c.second = prev
+		c.first = v.pop()
+		prev = c
+	}
+	v.push(prev)
+
 }
 
 func (v *vm) readPtr() ptr {
