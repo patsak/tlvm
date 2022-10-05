@@ -15,8 +15,8 @@ import (
 type VMByteCode struct {
 	consts               map[any]ptr // pointers to constants
 	constList            []any
-	labels               map[string]closure // pointers to labels in code
-	scope                *scope             // current variables scope
+	labels               map[string]*closure // pointers to labels in code
+	scope                *scope              // current variables scope
 	macrosByName         map[string]macros
 	externalFunctions    map[string]reflect.Value
 	autoIncrementLabelID int
@@ -109,7 +109,7 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 
 	vmByteCode := VMByteCode{
 		consts:    map[any]ptr{},
-		labels:    map[string]closure{},
+		labels:    map[string]*closure{},
 		debugInfo: map[int]string{},
 		scope: &scope{
 			varAddresses: map[any]ptr{},
@@ -231,15 +231,15 @@ func (c *scope) resolveAddress(v any) (btUint, valType, bool) {
 	return findAddr(c.parentScope)
 }
 
-func (c *VMByteCode) storeFunction(cv string, cl closure) {
+func (c *VMByteCode) storeFunction(cv string, cl *closure) {
 	c.labels[cv] = cl
 
 }
 
-func (c *VMByteCode) findFunction(cv string) (closure, bool) {
+func (c *VMByteCode) findFunction(cv string) (*closure, bool) {
 	v, ok := c.labels[cv]
 	if !ok {
-		return closure{}, false
+		return nil, false
 	}
 	return v, true
 }
@@ -530,6 +530,7 @@ func emitFunction(name string, expr SExpressions, cur *VMByteCode) closure {
 		name: name,
 		addr: cur.pos(),
 	}
+	cur.storeFunction(name, &fn)
 
 	args := consToList(expr[0].(*cons))
 	var restArg bool
@@ -550,15 +551,14 @@ func emitFunction(name string, expr SExpressions, cur *VMByteCode) closure {
 		cur.scope.storeAddr(v, offsetAddress(-(len(actualArgs) - i - 1))) // grow to stack bottom from base pointer
 	}
 
+	fn.rest = restArg
+	fn.nargs = len(actualArgs)
+
 	for _, e := range expr[1:] {
 		emit(e, cur)
 	}
 
-	fn.rest = restArg
-	fn.nargs = len(actualArgs)
-
 	emitReturn(fn, cur)
-	cur.storeFunction(name, fn)
 
 	return fn
 }
@@ -880,7 +880,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 		cur.writeOpCode(opPushClosure).
 			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
 			writeInt(fn.nargs). // lambda arguments count
-			writeBool(fn.rest)  // rest args flag
+			writeBool(fn.rest) // rest args flag
 
 		type closureVar struct {
 			stackAddr  btUint
