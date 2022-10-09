@@ -247,15 +247,38 @@ func TestEnvVariables(t *testing.T) {
 }
 
 func TestMacroExpand(t *testing.T) {
-	require.EqualValues(t, "(list (+ 1 0) 1 1 1)", compileAndRun(t, `(defmacro spl ()
-	    `+"`(list ,@(list (+ 1 0) 1) 1 1)"+`
-	)
-	(macroexpand '(spl))`))
-
-	require.EqualValues(t, "(+ (+ 1 2) (+ 3 4) 5 11)", compileAndRun(t, `
-(defmacro plus (a b c) 
-`+"`(+ ,a ,b ,c ,(+ 5 6)))"+`
-(macroexpand '(plus (+ 1 2) (+ 3 4) 5))`))
+	for _, tc := range []struct {
+		name           string
+		expectedExpand string
+		macros         string
+		input          string
+	}{
+		{
+			name: "MacroSplice",
+			macros: `(defmacro spl (l)
+			` + "`(list ,@l 2 3)" + `
+		)`,
+			input:          `(spl ((+ 1 0) 1)))`,
+			expectedExpand: "(list (+ 1 0) 1 2 3)",
+		},
+		{
+			name:           "Comma",
+			macros:         `(defmacro plus (a b c) ` + "`" + `(+ ,a ,b ,c ,(+ 5 6)))`,
+			input:          "(plus (+ 1 2) (+ 3 4) 5))",
+			expectedExpand: "(+ (+ 1 2) (+ 3 4) 5 11)",
+		},
+		{
+			name:           "RestArgs",
+			macros:         forRangeMacro,
+			input:          "(forRange i 0 10 (setq new (+ acc i)) (setq acc new)))",
+			expectedExpand: "(progn (setq i 0) (while (lt i 10) (setq new (+ acc i)) (setq acc new)))",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.EqualValues(t, tc.expectedExpand, compileAndRun(t, tc.macros+`
+	(macroexpand '`+tc.input))
+		})
+	}
 }
 
 func TestSmoke(t *testing.T) {

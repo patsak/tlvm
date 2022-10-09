@@ -396,7 +396,7 @@ func emit(node any, cur *VMByteCode) {
 			default:
 				l := consToList(v)
 				if _, ok := cur.macrosByName[l[0].(literal).value]; ok {
-					emitMacroCall(v, cur)
+					emitCallMacro(v, cur)
 				} else {
 					emitCallFunction(v, cur)
 				}
@@ -727,7 +727,7 @@ func emitDoList(cc *cons, cur *VMByteCode) {
 	})
 }
 
-func emitMacroCall(c *cons, cur *VMByteCode) {
+func emitCallMacro(c *cons, cur *VMByteCode) {
 	emit(expandMacros(c, cur), cur)
 }
 
@@ -760,13 +760,14 @@ func expandMacros(expr *cons, cur *VMByteCode) any {
 	vm.code = append(vm.code, macros.code...)
 	if macros.rest {
 		restArgs := args[macros.nargs-1:]
-		c := &cons{first: restArgs[0]}
+		initCons := &cons{first: restArgs[0]}
+		prevCons := initCons
 		for i := 1; i < len(restArgs); i++ {
 			next := &cons{first: restArgs[i]}
-			c.second = next
-			c = next
+			prevCons.second = next
+			prevCons = next
 		}
-		args[macros.nargs-1] = c
+		args[macros.nargs-1] = initCons
 		args = args[:macros.nargs]
 	}
 	for i := range args { // push arguments in reverse order for stack
@@ -828,25 +829,40 @@ func emitDefineMacros(cc *cons, cur *VMByteCode) {
 func emitBacktick(v any, cur *VMByteCode) {
 	switch vv := v.(type) {
 	case *cons:
-		if fl, ok := vv.first.(literal); ok && fl.value == "comma" {
-			emit(vv.second, cur)
-		} else if fl, ok := vv.first.(literal); ok && fl.value == "splice" {
-			l := consToList(vv.second.(*cons))[1:]
-
-			for i := len(l) - 1; i >= 0; i-- {
-				emitBacktick(l[i], cur)
-				if i > 0 {
-					cur.writeOpCode(opCons)
-				}
+		l := consToList(vv)
+		cur.writeOpCode(opPush).writeConstAddr(nil)
+		for i := 0; i < len(l); i++ {
+			v := l[len(l)-1-i]
+			if com, ok := matchMacroSpecialSymbol(v, comma); ok {
+				emit(com, cur)
+				cur.writeOpCode(opCons)
+			} else if spl, ok := matchMacroSpecialSymbol(v, splice); ok {
+				emit(spl, cur)
+				cur.writeOpCode(opSplice)
+			} else {
+				emitBacktick(v, cur)
+				cur.writeOpCode(opCons)
 			}
-		} else {
-			emitBacktick(vv.second, cur)
-			emitBacktick(vv.first, cur)
-			cur.writeOpCode(opCons)
 		}
+
 	default:
 		cur.writeOpCode(opPush).writeConstAddr(vv)
 	}
+}
+
+func matchMacroSpecialSymbol(input any, symbol string) (any, bool) {
+	c, ok := input.(*cons)
+	if !ok {
+		return literal{}, false
+	}
+	l, ok := c.first.(literal)
+	if !ok {
+		return literal{}, false
+	}
+	if l.value != symbol {
+		return literal{}, false
+	}
+	return c.second, true
 }
 
 func emitQuote(v any, cur *VMByteCode) {
@@ -880,7 +896,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 		cur.writeOpCode(opPushClosure).
 			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
 			writeInt(fn.nargs). // lambda arguments count
-			writeBool(fn.rest) // rest args flag
+			writeBool(fn.rest)  // rest args flag
 
 		type closureVar struct {
 			stackAddr  btUint

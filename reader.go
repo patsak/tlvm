@@ -7,6 +7,13 @@ import (
 	"github.com/joomcode/errorx"
 )
 
+const (
+	comma    = "comma"
+	splice   = "splice"
+	quote    = "quote"
+	backtick = "backtick"
+)
+
 func Read(sourceCode string) (SExpressions, error) {
 	tokens, err := tokenize(sourceCode)
 	if err != nil {
@@ -155,9 +162,9 @@ func (r *tokenReader) read() (_ any, err error) {
 		case tok.value == "`":
 			return r.wrapInCons("backtick", tok.pos)
 		case tok.value == ",@":
-			return r.wrapInCons("splice", tok.pos)
+			return r.wrapInCons(splice, tok.pos)
 		case tok.value == ",":
-			return r.wrapInCons("comma", tok.pos)
+			return r.wrapInCons(comma, tok.pos)
 		case tok.value[0] == ';':
 			continue
 		case tok.value[0] == '"' && tok.value[len(tok.value)-1] == '"':

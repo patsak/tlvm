@@ -46,8 +46,8 @@ const (
 	opCdr
 	opNil
 	opPrint
-	opDup
 	opNoOp
+	opSplice
 )
 
 const (
@@ -177,8 +177,8 @@ func (v *vm) CodeString() string {
 			b.WriteString("CDR")
 		case opPrint:
 			b.WriteString("PRINT")
-		case opDup:
-			b.WriteString("DUP")
+		case opSplice:
+			b.WriteString("SPLICE")
 		case opNoOp:
 			b.WriteString("NOOP")
 		case opHalt:
@@ -462,14 +462,25 @@ func (v *vm) Execute() (errRes error) {
 		case opCar:
 			c := v.pop().(*cons)
 			v.push(c.first)
+
 		case opCdr:
 			c := v.pop().(*cons)
 			v.push(c.second)
 		case opPrint:
 			c := v.pop()
 			fmt.Printf("%v\n", c)
-		case opDup:
-			v.push(v.stack[v.sp])
+		case opSplice:
+			c := v.pop().(*cons)
+			prev := v.pop()
+
+			l := consToList(c)
+			for i := 0; i < len(l); i++ {
+				prev = &cons{
+					first:  l[len(l)-1-i],
+					second: prev,
+				}
+			}
+			v.push(prev)
 		case opNoOp:
 		case opHalt:
 			return
@@ -543,6 +554,10 @@ func (v *vm) pop() any {
 	ret := v.stack[v.sp]
 	v.sp--
 	return ret
+}
+
+func (v *vm) peek() any {
+	return v.stack[v.sp]
 }
 
 func (v *vm) push(b any) {
