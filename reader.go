@@ -158,9 +158,9 @@ func (r *tokenReader) read() (_ any, err error) {
 			}
 			return firstCons, nil
 		case tok.value == "'":
-			return r.wrapInCons("quote", tok.pos)
+			return r.wrapInCons(quote, tok.pos)
 		case tok.value == "`":
-			return r.wrapInCons("backtick", tok.pos)
+			return r.wrapInCons(backtick, tok.pos)
 		case tok.value == ",@":
 			return r.wrapInCons(splice, tok.pos)
 		case tok.value == ",":

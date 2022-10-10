@@ -306,9 +306,10 @@ func (c *VMByteCode) pos() ptr {
 	return ptr(len(c.code))
 }
 
-func (c *VMByteCode) modify(i ptr, o btUint) {
-	for j := range o {
-		c.code[int(i+ptr(j))] = o[j]
+func (c *VMByteCode) modify(i ptr, p ptr) {
+	addr := makeByteUint(p)
+	for j := range addr {
+		c.code[i+ptr(j)] = addr[j]
 	}
 }
 
@@ -381,9 +382,9 @@ func emit(node any, cur *VMByteCode) {
 				emitDefineMacros(v, cur)
 			case "macroexpand":
 				emitMacroExpand(v, cur)
-			case "backtick":
+			case backtick:
 				emitBacktick(v.second, cur)
-			case "quote":
+			case quote:
 				emitQuote(v.second, cur)
 			case "lambda":
 				emitLambda(v, cur)
@@ -439,10 +440,10 @@ func emitAnd(cc *cons, cur *VMByteCode) {
 		writeOpCode(opJmp).iptr(&jmpAddr).writeEmptyAddress().
 		iptr(&falsePos).writeOpCode(opPush).writeConstAddr(boolFalse)
 
-	cur.modify(jmpAddr, makeByteUint(cur.pos()))
+	cur.modify(jmpAddr, cur.pos())
 
 	for _, i := range indexes {
-		cur.modify(i, makeByteUint(falsePos))
+		cur.modify(i, falsePos)
 	}
 }
 
@@ -462,7 +463,7 @@ func emitOr(cc *cons, cur *VMByteCode) {
 		var i, next ptr
 		cur.writeOpCode(opBr).iptr(&next).writeEmptyAddress()
 		cur.writeOpCode(opJmp).iptr(&i).writeEmptyAddress()
-		cur.modify(next, makeByteUint(cur.pos()))
+		cur.modify(next, cur.pos())
 		indexes = append(indexes, i)
 	}
 
@@ -471,9 +472,9 @@ func emitOr(cc *cons, cur *VMByteCode) {
 	cur.writeOpCode(opJmp).iptr(&lastJump).writeEmptyAddress()
 	cur.iptr(&truePos).writeOpCode(opPush).writeConstAddr(boolTrue)
 
-	cur.modify(lastJump, makeByteUint(cur.pos()))
+	cur.modify(lastJump, cur.pos())
 	for _, i := range indexes {
-		cur.modify(i, makeByteUint(truePos))
+		cur.modify(i, truePos)
 	}
 }
 
@@ -588,14 +589,14 @@ func emitReturn(cl closure, cur *VMByteCode) {
 	}
 	cur.writeOpCode(opJmp).iptr(&retIndex).writeEmptyAddress()
 
-	cur.modify(jumpPrepareIndex, makeByteUint(cur.pos()))
+	cur.modify(jumpPrepareIndex, cur.pos())
 	for i := 0; i < cl.nargs; i++ {
 		cur.writeOpCode(opStore).writePointer(offsetAddress(-i))
 	}
 	cur.writeOpCode(opJmp).writeAddress(labelAddr)
 	cur.debug("end define function %s", cl.name)
 	cur.writeOpCode(opRet)
-	cur.modify(retIndex, makeByteUint(cur.pos()-1))
+	cur.modify(retIndex, cur.pos()-1)
 }
 
 func emitCallFunction(cc *cons, cur *VMByteCode) {
@@ -651,11 +652,11 @@ func emitIf(cc *cons, cur *VMByteCode) {
 	if len(l) > 3 { // with else
 		cur.writeOpCode(opJmp).iptr(&elseEnd).writeEmptyAddress()
 	}
-	cur.modify(elseStart, makeByteUint(cur.pos()))
+	cur.modify(elseStart, cur.pos())
 	if len(l) > 3 { // with else
 		elseBlock := l[3]
 		emit(elseBlock, cur)
-		cur.modify(elseEnd, makeByteUint(cur.pos()))
+		cur.modify(elseEnd, cur.pos())
 	}
 }
 
@@ -723,7 +724,7 @@ func emitDoList(cc *cons, cur *VMByteCode) {
 		cur.writeOpCode(opCdr)
 		cur.writeOpCode(opStore).writeAddress(ad)
 		cur.writeOpCode(opJmp).writePointer(begin)
-		cur.modify(end, makeByteUint(cur.pos()))
+		cur.modify(end, cur.pos())
 	})
 }
 
@@ -890,7 +891,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 		fn := emitFunction(labelID, l[1:], cur)
 
 		funcDefinitionLength := cur.pos() - startDefinitionAddress
-		cur.modify(endLambdaAddress, makeByteUint(offsetAddress(int(funcDefinitionLength))))
+		cur.modify(endLambdaAddress, offsetAddress(int(funcDefinitionLength)))
 		cur.debug("label %s", labelID)
 
 		cur.writeOpCode(opPushClosure).
@@ -953,7 +954,7 @@ func emitWhile(v *cons, cur *VMByteCode) {
 		emit(b, cur)
 	}
 	cur.writeOpCode(opJmp).writePointer(checkConditionPtr)
-	cur.modify(breakAddress, makeByteUint(cur.pos()))
+	cur.modify(breakAddress, cur.pos())
 }
 
 func emitLiteral(v literal, cur *VMByteCode) {
