@@ -7,6 +7,18 @@ import (
 
 type SExpressions []any
 
+func (e SExpressions) headLiteralValue() string {
+	return e[0].(literal).value
+}
+
+func (e SExpressions) head() any {
+	return e[0]
+}
+
+func (e SExpressions) tail() SExpressions {
+	return e[1:]
+}
+
 type valueAndPosition interface {
 	valueAndPosition() (any, int)
 }
@@ -108,4 +120,12 @@ func (p ptr) abs(base int) ptr {
 	} else {
 		return p
 	}
+}
+
+type closure struct {
+	name   string
+	addr   ptr
+	nargs  int
+	rest   bool
+	values []*any
 }
