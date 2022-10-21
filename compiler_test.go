@@ -182,6 +182,19 @@ func TestCommonOperators(t *testing.T) {
 			code:   `((lambda (a &rest b) b) 1 2 3)`,
 			result: "(2 3)",
 		},
+		{
+			name: "hashTable",
+			code: `
+(setq t (make-hash-table))
+(seth t "foo1" "bar1")
+(seth t "foo2" "bar2")
+(seth t "foo3" "bar3")
+(seth t "foo4" "bar4")
+(seth t "foo5" "bar5")
+(geth t "foo1")
+`,
+			result: "bar1",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vmCode, err := Compile(tc.code, tc.options...)

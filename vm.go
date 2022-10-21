@@ -48,6 +48,9 @@ const (
 	opPrint
 	opNoOp
 	opSplice
+	opMakeHashTable
+	opSetHashTableValue
+	opGetHashTableValue
 )
 
 const (
@@ -181,6 +184,12 @@ func (v *vm) CodeString() string {
 			b.WriteString("SPLICE")
 		case opNoOp:
 			b.WriteString("NOOP")
+		case opMakeHashTable:
+			b.WriteString("MAKE_HASH_TABLE")
+		case opSetHashTableValue:
+			b.WriteString("SET_HASH_TABLE_VALUE")
+		case opGetHashTableValue:
+			b.WriteString("GET_HASH_TABLE_VALUE")
 		case opHalt:
 		default:
 			panic(errorx.IllegalFormat.New("unknown code %d", o))
@@ -481,6 +490,18 @@ func (v *vm) Execute() (errRes error) {
 				}
 			}
 			v.push(prev)
+		case opMakeHashTable:
+			v.push(make(map[any]any))
+		case opSetHashTableValue:
+			m := v.pop().(map[any]any)
+			k := v.pop()
+			v := v.pop()
+			m[k] = v
+		case opGetHashTableValue:
+			m := v.pop().(map[any]any)
+			k := v.pop()
+			v.push(m[k])
+
 		case opNoOp:
 		case opHalt:
 			return

@@ -273,6 +273,12 @@ func emit(node any, cur *VMByteCode) {
 				emitSetq(v, cur)
 			case "list":
 				emitList(consToList(v), cur)
+			case "make-hash-table":
+				emitMakeHashTable(cur)
+			case "seth":
+				emitSeth(consToList(v).tail(), cur)
+			case "geth":
+				emitGeth(consToList(v).tail(), cur)
 			case "dolist":
 				emitDoList(v, cur)
 			case "defun":
@@ -317,6 +323,19 @@ func emit(node any, cur *VMByteCode) {
 	default:
 		panic(errorx.IllegalFormat.New("unexpected value %v with type %t", v, v))
 	}
+}
+
+func emitSeth(args SExpressions, cur *VMByteCode) {
+	emit(args[2], cur)
+	emit(args[1], cur)
+	emit(args[0], cur)
+	cur.writeOpCode(opSetHashTableValue)
+}
+
+func emitGeth(args SExpressions, cur *VMByteCode) {
+	emit(args[1], cur)
+	emit(args[0], cur)
+	cur.writeOpCode(opGetHashTableValue)
 }
 
 func variableParts(s string) []string {
@@ -824,6 +843,10 @@ func emitWhile(v *cons, cur *VMByteCode) {
 	}
 	cur.writeOpCode(opJmp).writePointer(checkConditionPtr)
 	cur.modify(breakAddress, cur.pos())
+}
+
+func emitMakeHashTable(cur *VMByteCode) {
+	cur.writeOpCode(opMakeHashTable)
 }
 
 func emitLiteral(v literal, cur *VMByteCode) {
