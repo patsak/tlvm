@@ -294,15 +294,16 @@ func TestSmoke(t *testing.T) {
 	)
 )
 
-(defmacro spl ()
-     ` + "`(list ,@(list (+ 1 0) 1) 1 1)" + `
+(defmacro spl (&rest a)
+     ` + "`(list ,@a 1 1)" + `
 )
 
 (defun increment (x) 
 	(setq ll (lambda (a c) (+ a (fact c))))
 	(setq k 15)
 	(setq q x)
-	(dolist (k (spl)) ; 3+7+15+31
+
+	(dolist (k (spl (+ 1 0) 1)) ; 3+7+15+31
 		(setq q (+ q (ll q k))))
 	(+ q k))
 

@@ -635,7 +635,6 @@ func emitMacroExpand(c *cons, cur *VMByteCode) {
 
 func expandMacros(expr *cons, cur *VMByteCode) any {
 	l := consToList(expr)
-	vm := NewVM(cur)
 
 	name := l.headLiteralValue()
 	args := l.tail()
@@ -646,8 +645,7 @@ func expandMacros(expr *cons, cur *VMByteCode) any {
 	if !macros.rest && len(args) != macros.nargs {
 		errorx.Panic(errorx.IllegalArgument.New("number of arguments for macros %s must be equal to %d", name, macros.nargs))
 	}
-	vm.ip = len(vm.code)
-	vm.code = append(vm.code, macros.code...)
+
 	if macros.rest {
 		restArgs := args[macros.nargs-1:]
 		initCons := &cons{first: restArgs[0]}
@@ -661,6 +659,9 @@ func expandMacros(expr *cons, cur *VMByteCode) any {
 		args = args[:macros.nargs]
 	}
 
+	vm := NewVM(cur)
+	vm.ip = len(vm.code)
+	vm.code = append(vm.code, macros.code...)
 	for i := range args {
 		vm.push(args[i])
 	}
