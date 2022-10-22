@@ -197,12 +197,12 @@ func TestCommonOperators(t *testing.T) {
 		},
 		{
 			name: "vector",
-			code: `
+			code: stdMacroses + `
 (setq t (make-vector))
-(setq t (appendv t "bar1"))
-(setq t (appendv t "bar2"))
-(setq t (appendv t "bar3"))
-(setq t (appendv t "bar4"))
+(appendvs t "bar1")
+(appendvs t "bar2")
+(appendvs t "bar3")
+(appendvs t "bar4")
 (getv t 1)
 `,
 			result: "bar2",
