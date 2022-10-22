@@ -279,6 +279,14 @@ func emit(node any, cur *VMByteCode) {
 				emitSeth(consToList(v).tail(), cur)
 			case "geth":
 				emitGeth(consToList(v).tail(), cur)
+			case "make-vector":
+				emitMakeVector(cur)
+			case "setv":
+				emitSetv(consToList(v).tail(), cur)
+			case "getv":
+				emitGetv(consToList(v).tail(), cur)
+			case "appendv":
+				emitAppendVector(consToList(v).tail(), cur)
 			case "dolist":
 				emitDoList(v, cur)
 			case "defun":
@@ -847,6 +855,29 @@ func emitWhile(v *cons, cur *VMByteCode) {
 
 func emitMakeHashTable(cur *VMByteCode) {
 	cur.writeOpCode(opMakeHashTable)
+}
+
+func emitMakeVector(cur *VMByteCode) {
+	cur.writeOpCode(opMakeVector)
+}
+
+func emitSetv(args SExpressions, cur *VMByteCode) {
+	emit(args[2], cur)
+	emit(args[1], cur)
+	emit(args[0], cur)
+	cur.writeOpCode(opSetVectorValue)
+}
+
+func emitGetv(args SExpressions, cur *VMByteCode) {
+	emit(args[1], cur)
+	emit(args[0], cur)
+	cur.writeOpCode(opGetVectorValue)
+}
+
+func emitAppendVector(args SExpressions, cur *VMByteCode) {
+	emit(args[1], cur)
+	emit(args[0], cur)
+	cur.writeOpCode(opAppendVectorValue)
 }
 
 func emitLiteral(v literal, cur *VMByteCode) {

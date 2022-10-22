@@ -195,6 +195,18 @@ func TestCommonOperators(t *testing.T) {
 `,
 			result: "bar1",
 		},
+		{
+			name: "vector",
+			code: `
+(setq t (make-vector))
+(setq t (appendv t "bar1"))
+(setq t (appendv t "bar2"))
+(setq t (appendv t "bar3"))
+(setq t (appendv t "bar4"))
+(getv t 1)
+`,
+			result: "bar2",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vmCode, err := Compile(tc.code, tc.options...)

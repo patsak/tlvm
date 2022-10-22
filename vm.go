@@ -51,6 +51,10 @@ const (
 	opMakeHashTable
 	opSetHashTableValue
 	opGetHashTableValue
+	opMakeVector
+	opSetVectorValue
+	opAppendVectorValue
+	opGetVectorValue
 )
 
 const (
@@ -190,6 +194,14 @@ func (v *vm) CodeString() string {
 			b.WriteString("SET_HASH_TABLE_VALUE")
 		case opGetHashTableValue:
 			b.WriteString("GET_HASH_TABLE_VALUE")
+		case opMakeVector:
+			b.WriteString("MAKE_VECTOR")
+		case opSetVectorValue:
+			b.WriteString("SET_VECTOR_VALUE")
+		case opGetVectorValue:
+			b.WriteString("GET_VECTOR_VALUE")
+		case opAppendVectorValue:
+			b.WriteString("APPEND_VECTOR_VALUE")
 		case opHalt:
 		default:
 			panic(errorx.IllegalFormat.New("unknown code %d", o))
@@ -501,7 +513,22 @@ func (v *vm) Execute() (errRes error) {
 			m := v.pop().(map[any]any)
 			k := v.pop()
 			v.push(m[k])
-
+		case opMakeVector:
+			v.push(make([]any, 0))
+		case opSetVectorValue:
+			m := v.pop().([]any)
+			k := v.pop().(int64)
+			v := v.pop()
+			m[k] = v
+		case opGetVectorValue:
+			m := v.pop().([]any)
+			k := v.pop().(int64)
+			v.push(m[k])
+		case opAppendVectorValue:
+			m := v.pop().([]any)
+			n := v.pop()
+			m = append(m, n)
+			v.push(m)
 		case opNoOp:
 		case opHalt:
 			return
