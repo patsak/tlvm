@@ -311,7 +311,7 @@ func (v *vm) Execute() (errRes error) {
 				}
 			}
 
-			v.push(&closure{addr: ip, nargs: n, rest: rest, values: closureVars})
+			v.push(&closure{addr: ip, nargs: n, varargs: rest, values: closureVars})
 		case opPushField:
 			variableAddr := v.stackAddrArg()
 			fieldPathAddr := v.stackAddrArg()
@@ -439,8 +439,8 @@ func (v *vm) Execute() (errRes error) {
 			cl := v.pop().(*closure)
 			nargs := v.readInt()
 
-			if !cl.rest && nargs != cl.nargs ||
-				cl.rest && nargs < cl.nargs {
+			if !cl.varargs && nargs != cl.nargs ||
+				cl.varargs && nargs < cl.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
 			}
 			v.pushRestArgIfNeeded(nargs, cl)
@@ -539,7 +539,7 @@ func (v *vm) Execute() (errRes error) {
 }
 
 func (v *vm) pushRestArgIfNeeded(nargs int, cl *closure) {
-	if !cl.rest {
+	if !cl.varargs {
 		return
 	}
 	var prev any

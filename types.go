@@ -123,9 +123,9 @@ func (p ptr) abs(base int) ptr {
 }
 
 type closure struct {
-	name   string
-	addr   ptr
-	nargs  int
-	rest   bool
-	values []*any
+	name    string // function name
+	addr    ptr    // function code pointer
+	nargs   int    // number of function arguments
+	varargs bool   // variable arguments exists
+	values  []*any // bound variables from external scope
 }

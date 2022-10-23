@@ -98,15 +98,10 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 	}
 
 	vmByteCode := VMByteCode{
-		consts:    map[any]ptr{},
-		labels:    map[string]*closure{},
-		debugInfo: map[int]string{},
-		scope: &scope{
-			varAddresses: map[any]ptr{},
-			closure: &scope{
-				varAddresses: map[any]ptr{},
-			},
-		},
+		consts:              map[any]ptr{},
+		labels:              map[string]*closure{},
+		debugInfo:           map[int]string{},
+		scope:               newScope(scopeTypeLexical, nil),
 		origPositionPointer: map[int]int{},
 		macrosByName:        map[string]macros{},
 	}
@@ -213,15 +208,7 @@ func (c *VMByteCode) modify(i ptr, p ptr) {
 }
 
 func (c *VMByteCode) inNewScope(typ scopeType, f func()) {
-	c.scope = &scope{ // init new scope
-		parentScope:  c.scope,
-		offset:       c.scope.offset,
-		varAddresses: map[any]ptr{},
-		closure: &scope{
-			varAddresses: map[any]ptr{},
-		},
-		scopeType: typ,
-	}
+	c.scope = newScope(typ, c.scope)
 	defer func() { // restore scope
 		c.scope = c.scope.parentScope
 	}()
@@ -440,7 +427,7 @@ func emitDefineFunction(cc *cons, cur *VMByteCode) {
 }
 
 func emitFunction(name string, expr SExpressions, cur *VMByteCode) closure {
-	cur.scope.offset = callFrameOffset + 1 // skip stack entries stored by CALL opcode
+	cur.scope.addressOffset = callFrameOffset + 1 // skip stack entries stored by CALL opcode
 
 	cur.debug("define function %s", name)
 	fn := closure{
@@ -468,7 +455,7 @@ func emitFunction(name string, expr SExpressions, cur *VMByteCode) closure {
 		cur.scope.storeAddr(v, offsetAddress(-(len(actualArgs) - i - 1))) // grow to stack bottom from base pointer
 	}
 
-	fn.rest = restArg
+	fn.varargs = restArg
 	fn.nargs = len(actualArgs)
 
 	for _, e := range expr.tail() {
@@ -792,8 +779,8 @@ func emitLambda(v *cons, cur *VMByteCode) {
 
 		cur.writeOpCode(opPushClosure).
 			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
-			writeInt(fn.nargs). // lambda arguments count
-			writeBool(fn.rest)  // rest args flag
+			writeInt(fn.nargs).   // lambda arguments count
+			writeBool(fn.varargs) // rest args flag
 
 		type closureVar struct {
 			stackAddr  ptr
@@ -801,7 +788,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 			closurePtr ptr
 		}
 		var localAddresses []closureVar
-		for v, closureValPtr := range cur.scope.closure.varAddresses {
+		for v, closureValPtr := range cur.scope.boundVariables.variablePointer {
 			localAddress, vt, ok := cur.scope.parentScope.findLocalAddress(v)
 			if !ok {
 				errorx.Panic(errorx.IllegalState.New("closure variable must exists in local variables in parent scope"))
@@ -912,21 +899,38 @@ const (
 )
 
 type scope struct {
-	parentScope  *scope
-	offset       int
-	closure      *scope
-	scopeType    scopeType
-	varAddresses map[any]ptr
+	parentScope     *scope
+	addressOffset   int
+	boundVariables  *scope
+	scopeType       scopeType
+	variablePointer map[any]ptr
+}
+
+func newScope(tp scopeType, parentScope *scope) *scope {
+	var offset int
+	if parentScope != nil {
+		offset = parentScope.addressOffset
+	}
+
+	return &scope{
+		scopeType:       tp,
+		parentScope:     parentScope,
+		addressOffset:   offset,
+		variablePointer: make(map[any]ptr),
+		boundVariables: &scope{
+			variablePointer: make(map[any]ptr),
+		},
+	}
 }
 
 func (c *scope) createNextAddr(v any) ptr {
-	c.varAddresses[v] = offsetAddress(c.offset)
-	c.offset++
-	return c.varAddresses[v]
+	c.variablePointer[v] = offsetAddress(c.addressOffset)
+	c.addressOffset++
+	return c.variablePointer[v]
 }
 
 func (c *scope) storeAddr(v any, pos ptr) btUint {
-	c.varAddresses[v] = pos
+	c.variablePointer[v] = pos
 	return makeByteUint(pos)
 }
 
@@ -934,11 +938,11 @@ func (c *scope) findLocalAddress(v any) (ptr, valType, bool) {
 	if c == nil {
 		return 0, 0, false
 	}
-	localAddr, ok := c.varAddresses[v]
+	localAddr, ok := c.variablePointer[v]
 	if ok {
 		return localAddr, valTypeLocal, true
 	}
-	closureAddr, ok := c.closure.varAddresses[v]
+	closureAddr, ok := c.boundVariables.variablePointer[v]
 	if ok {
 		return closureAddr, valTypeClosure, true
 	}
@@ -947,7 +951,7 @@ func (c *scope) findLocalAddress(v any) (ptr, valType, bool) {
 }
 
 func (c *scope) closureAddress(v any) (btUint, bool) {
-	a, ok := c.closure.varAddresses[v]
+	a, ok := c.boundVariables.variablePointer[v]
 	if ok {
 		return makeByteUint(a), ok
 	}
@@ -955,11 +959,11 @@ func (c *scope) closureAddress(v any) (btUint, bool) {
 }
 
 func (c *scope) resolveAddress(v any) (ptr, valType, bool) {
-	localAddr, ok := c.varAddresses[v]
+	localAddr, ok := c.variablePointer[v]
 	if ok {
 		return localAddr, valTypeLocal, true
 	}
-	closureAddr, ok := c.closure.varAddresses[v]
+	closureAddr, ok := c.boundVariables.variablePointer[v]
 	if ok {
 		return closureAddr, valTypeClosure, true
 	}
@@ -969,20 +973,20 @@ func (c *scope) resolveAddress(v any) (ptr, valType, bool) {
 		if s == nil {
 			return 0, 0, false
 		}
-		_, ok := s.varAddresses[v]
+		_, ok := s.variablePointer[v]
 		if ok {
 			if s.parentScope != nil && c.scopeType == scopeTypeStackFrame {
-				return c.closure.createNextAddr(v), valTypeClosure, true
+				return c.boundVariables.createNextAddr(v), valTypeClosure, true
 			} else {
-				return s.varAddresses[v], valTypeLocal, true
+				return s.variablePointer[v], valTypeLocal, true
 			}
 		}
 		if s.parentScope != nil {
 			res, vt, ok := findAddr(s.parentScope)
 
-			if ok && vt == valTypeClosure && s.scopeType == scopeTypeStackFrame { // close variable in parent stack frames
+			if ok && vt == valTypeClosure && s.scopeType == scopeTypeStackFrame { // bound variable in parent stack frames
 				if _, _, ok := s.findLocalAddress(v); !ok {
-					s.closure.createNextAddr(v)
+					s.boundVariables.createNextAddr(v)
 				}
 			}
 			return res, vt, ok
