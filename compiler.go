@@ -123,6 +123,14 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 	return &vmByteCode, nil
 }
 
+func Build(text string, options ...CompileOption) (*VM, error) {
+	compileResult, err := Compile(text, options...)
+	if err != nil {
+		return nil, err
+	}
+	return NewVM(compileResult), nil
+}
+
 func (c *VMByteCode) constAddr(v any) ptr {
 	_, ok := c.consts[v]
 	if ok {

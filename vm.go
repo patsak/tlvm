@@ -70,7 +70,7 @@ const (
 	addrShiftLeftFlag  ptr  = 1 << 14
 )
 
-type vm struct {
+type VM struct {
 	stack                       [256]any
 	code                        []byte         // byte code
 	cp                          int            // constants top pointer
@@ -85,8 +85,8 @@ type vm struct {
 
 const callFrameOffset = 4
 
-func NewVM(output *VMByteCode) *vm {
-	vm := &vm{
+func NewVM(output *VMByteCode) *VM {
+	vm := &VM{
 		code: append(output.definedFunctions, output.code...),
 		bp:   -1,
 		sp:   -1,
@@ -105,7 +105,7 @@ func NewVM(output *VMByteCode) *vm {
 	return vm
 }
 
-func (v *vm) CodeString() string {
+func (v *VM) CodeString() string {
 	sBp, sSp, sIp := v.bp, v.sp, v.ip
 	defer func() {
 		v.bp = sBp
@@ -215,28 +215,28 @@ func (v *vm) CodeString() string {
 	return b.String()
 }
 
-func (v *vm) Copy() vm {
+func (v *VM) Copy() VM {
 	nv := *v
 	return nv
 }
 
-func (vm *vm) EnvInt(k string, v int) {
+func (vm *VM) EnvInt(k string, v int) {
 	vm.Env(k, int64(v))
 }
 
-func (vm *vm) EnvInt64(k string, v int64) {
+func (vm *VM) EnvInt64(k string, v int64) {
 	vm.Env(k, v)
 }
 
-func (vm *vm) EnvFloat32(k string, v float32) {
+func (vm *VM) EnvFloat32(k string, v float32) {
 	vm.Env(k, float64(v))
 }
 
-func (vm *vm) EnvFloat64(k string, v float64) {
+func (vm *VM) EnvFloat64(k string, v float64) {
 	vm.Env(k, v)
 }
 
-func (vm *vm) Env(k any, v any) {
+func (vm *VM) Env(k any, v any) {
 	pos, ok := vm.env[k]
 	if !ok {
 		return
@@ -244,21 +244,21 @@ func (vm *vm) Env(k any, v any) {
 	vm.stack[pos] = v
 }
 
-func (vm *vm) EnvString(k string, v string) {
+func (vm *VM) EnvString(k string, v string) {
 	vm.stack[vm.env[k]] = v
 }
 
-func (v *vm) Result() any {
+func (v *VM) Result() any {
 	return v.stack[v.sp]
 }
 
-func (v *vm) Reset() {
+func (v *VM) Reset() {
 	v.ip = v.ep
 	v.bp = v.cp + 1
 	v.sp = v.cp
 }
 
-func (v *vm) Execute() (errRes error) {
+func (v *VM) Execute() (errRes error) {
 	defer func() {
 		err := recover()
 		if err == nil {
@@ -537,7 +537,7 @@ func (v *vm) Execute() (errRes error) {
 	return nil
 }
 
-func (v *vm) pushRestArgIfNeeded(nargs int, cl *closure) {
+func (v *VM) pushRestArgIfNeeded(nargs int, cl *closure) {
 	if !cl.varargs {
 		return
 	}
@@ -553,66 +553,66 @@ func (v *vm) pushRestArgIfNeeded(nargs int, cl *closure) {
 
 }
 
-func (v *vm) readPtr() ptr {
+func (v *VM) readPtr() ptr {
 	res := binary.BigEndian.Uint16(v.code[v.ip : v.ip+2])
 	v.ip += 2
 	return ptr(res)
 }
 
-func (v *vm) readInt() int {
+func (v *VM) readInt() int {
 	return int(v.readPtr())
 }
 
-func (v *vm) readBool() bool {
+func (v *VM) readBool() bool {
 	return v.next() > 0
 }
 
-func (v *vm) stackAddrArg() ptr {
+func (v *VM) stackAddrArg() ptr {
 	return v.readPtr().abs(v.bp)
 }
 
-func (v *vm) closureAddr() ptr {
+func (v *VM) closureAddr() ptr {
 	return v.readPtr().abs(0)
 }
 
-func (v *vm) closure() []*any {
+func (v *VM) closure() []*any {
 	return v.stack[v.bp+2].([]*any)
 }
 
-func (v *vm) ipAddrArg() ptr {
+func (v *VM) ipAddrArg() ptr {
 	return v.readPtr().abs(v.ip)
 }
 
-func (v *vm) strStackAddr() string {
+func (v *VM) strStackAddr() string {
 	return v.readPtr().format("bp")
 }
 
-func (v *vm) strIpAddr() string {
+func (v *VM) strIpAddr() string {
 	return fmt.Sprintf("%d", v.readPtr().abs(v.ip))
 }
 
-func (v *vm) next() byte {
+func (v *VM) next() byte {
 	a := v.code[v.ip]
 	v.ip++
 	return a
 }
 
-func (v *vm) pop() any {
+func (v *VM) pop() any {
 	ret := v.stack[v.sp]
 	v.sp--
 	return ret
 }
 
-func (v *vm) peek() any {
+func (v *VM) peek() any {
 	return v.stack[v.sp]
 }
 
-func (v *vm) push(b any) {
+func (v *VM) push(b any) {
 	v.sp++
 	v.stack[v.sp] = b
 }
 
-func (v *vm) goTo(p ptr) {
+func (v *VM) goTo(p ptr) {
 	v.ip = int(p.abs(v.ip))
 }
 
