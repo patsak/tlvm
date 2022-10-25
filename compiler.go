@@ -23,6 +23,7 @@ type VMByteCode struct {
 
 	debugInfo           map[int]string
 	origPositionPointer map[int]int
+	enableDebugInfo     bool
 
 	definedFunctions []byte // code section with defined functions
 	code             []byte // result code
@@ -36,9 +37,9 @@ const (
 )
 
 type macros struct {
-	code  []byte
-	rest  bool
-	nargs int
+	code  []byte // macros function body
+	rest  bool   // rest args flag
+	nargs int    // number of arguments
 }
 
 type CompileOption func(bt *VMByteCode)
@@ -74,6 +75,12 @@ func EnvVariables(env ...string) CompileOption {
 		for _, k := range env {
 			bt.constAddr(k)
 		}
+	}
+}
+
+func EnableDebugSymbols() CompileOption {
+	return func(bt *VMByteCode) {
+		bt.enableDebugInfo = true
 	}
 }
 
@@ -162,12 +169,8 @@ func (c *VMByteCode) writeOpCode(op opCode) *VMByteCode {
 }
 
 func (c *VMByteCode) writePointer(a ptr) *VMByteCode {
-	return c.writeAddress(makeByteUint(a))
-}
-
-func (c *VMByteCode) writeAddress(a btUint) *VMByteCode {
-	bts := a[:]
-	return c.b(bts...)
+	bts := makeByteUint(a)
+	return c.b(bts[:]...)
 }
 
 func (c *VMByteCode) writeInt(a int) *VMByteCode {
@@ -216,6 +219,9 @@ func (c *VMByteCode) inNewScope(typ scopeType, f func()) {
 }
 
 func (c *VMByteCode) debug(msg string, args ...any) {
+	if !c.enableDebugInfo {
+		return
+	}
 	c.debugInfo[len(c.definedFunctions)+int(c.pos())] = fmt.Sprintf(msg, args...)
 }
 
@@ -282,9 +288,9 @@ func emit(node any, cur *VMByteCode) {
 				emitDefineMacros(v, cur)
 			case "macroexpand":
 				emitMacroExpand(v, cur)
-			case backtick:
+			case keywordBacktick:
 				emitBacktick(v.second, cur)
-			case quote:
+			case keywordQuote:
 				emitQuote(v.second, cur)
 			case "lambda":
 				emitLambda(v, cur)
@@ -442,7 +448,7 @@ func emitFunction(name string, expr SExpressions, cur *VMByteCode) closure {
 	var actualArgs SExpressions
 	for i, a := range args {
 		v := a.(literal).value
-		if v == "&rest" {
+		if v == keywordRest {
 			restArg = true
 			actualArgs = append(actualArgs, args[i+1])
 			break
@@ -709,7 +715,7 @@ func emitDefineMacros(cc *cons, cur *VMByteCode) {
 	var actualArgs SExpressions
 	for i, a := range args {
 		v := a.(literal).value
-		if v == "&rest" {
+		if v == keywordRest {
 			restArg = true
 			actualArgs = append(actualArgs, args[i+1])
 			break
@@ -740,10 +746,10 @@ func emitBacktick(v any, cur *VMByteCode) {
 		cur.writeOpCode(opPush).writeConstAddr(nil)
 		for i := 0; i < len(l); i++ {
 			v := l[len(l)-1-i]
-			if com, ok := matchMacroSpecialSymbol(v, comma); ok {
+			if com, ok := matchMacroSpecialSymbol(v, keywordComma); ok {
 				emit(com, cur)
 				cur.writeOpCode(opCons)
-			} else if spl, ok := matchMacroSpecialSymbol(v, splice); ok {
+			} else if spl, ok := matchMacroSpecialSymbol(v, keywordSplice); ok {
 				emit(spl, cur)
 				cur.writeOpCode(opSplice)
 			} else {
@@ -900,8 +906,8 @@ const (
 
 type scope struct {
 	parentScope     *scope
-	addressOffset   int
-	boundVariables  *scope
+	addressOffset   int    // offset from base stack pointer
+	boundVariables  *scope // variables from parent scopes
 	scopeType       scopeType
 	variablePointer map[any]ptr
 }
@@ -929,9 +935,8 @@ func (c *scope) createNextAddr(v any) ptr {
 	return c.variablePointer[v]
 }
 
-func (c *scope) storeAddr(v any, pos ptr) btUint {
+func (c *scope) storeAddr(v any, pos ptr) {
 	c.variablePointer[v] = pos
-	return makeByteUint(pos)
 }
 
 func (c *scope) findLocalAddress(v any) (ptr, valType, bool) {
@@ -948,14 +953,6 @@ func (c *scope) findLocalAddress(v any) (ptr, valType, bool) {
 	}
 
 	return 0, 0, false
-}
-
-func (c *scope) closureAddress(v any) (btUint, bool) {
-	a, ok := c.boundVariables.variablePointer[v]
-	if ok {
-		return makeByteUint(a), ok
-	}
-	return btUint{}, false
 }
 
 func (c *scope) resolveAddress(v any) (ptr, valType, bool) {

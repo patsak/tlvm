@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	comma    = "comma"
-	splice   = "splice"
-	quote    = "quote"
-	backtick = "backtick"
+	keywordComma    = "comma"
+	keywordSplice   = "splice"
+	keywordQuote    = "quote"
+	keywordBacktick = "backtick"
+	keywordRest     = "&rest"
 )
 
 func Read(sourceCode string) (SExpressions, error) {
@@ -158,13 +159,13 @@ func (r *tokenReader) read() (_ any, err error) {
 			}
 			return firstCons, nil
 		case tok.value == "'":
-			return r.wrapInCons(quote, tok.pos)
+			return r.wrapInCons(keywordQuote, tok.pos)
 		case tok.value == "`":
-			return r.wrapInCons(backtick, tok.pos)
+			return r.wrapInCons(keywordBacktick, tok.pos)
 		case tok.value == ",@":
-			return r.wrapInCons(splice, tok.pos)
+			return r.wrapInCons(keywordSplice, tok.pos)
 		case tok.value == ",":
-			return r.wrapInCons(comma, tok.pos)
+			return r.wrapInCons(keywordComma, tok.pos)
 		case tok.value[0] == ';':
 			continue
 		case tok.value[0] == '"' && tok.value[len(tok.value)-1] == '"':

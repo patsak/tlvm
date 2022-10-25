@@ -287,8 +287,7 @@ func (v *vm) Execute() (errRes error) {
 		case opStoreClosureVal:
 			vv := v.pop()
 			a := v.closureAddr()
-			ptr := v.closure()[a]
-			*ptr = vv
+			*v.closure()[a] = vv
 		case opPushClosure:
 			ip := v.ipAddrArg()
 			n := v.readInt()
@@ -665,6 +664,5 @@ func castFloat(v any) float64 {
 		return float64(vt)
 	default:
 		panic(errorx.Panic(errorx.IllegalArgument.New("can't cast %T to int", v)))
-
 	}
 }
