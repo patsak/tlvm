@@ -8,11 +8,24 @@ import (
 )
 
 const (
-	keywordComma    = "comma"
-	keywordSplice   = "splice"
-	keywordQuote    = "quote"
-	keywordBacktick = "backtick"
-	keywordRest     = "&rest"
+	keywordComma       = "comma"
+	keywordSplice      = "splice"
+	keywordQuote       = "quote"
+	keywordBacktick    = "backtick"
+	keywordRest        = "&rest"
+	keywordDefun       = "defun"
+	keywordDefmacro    = "defmacro"
+	keywordMacroexpand = "macroexpand"
+	keywordWhile       = "while"
+	keywordLambda      = "lambda"
+	keywordProgn       = "progn"
+	keywordPrint       = "print"
+	keywordSetq        = "setq"
+	keywordIf          = "if"
+	keywordOr          = "or"
+	keywordNot         = "not"
+	keywordAnd         = "and"
+	keywordList        = "list"
 )
 
 func Read(sourceCode string) (SExpressions, error) {

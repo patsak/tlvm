@@ -248,13 +248,13 @@ func emit(node any, cur *VMByteCode) {
 			cur.writeOpCode(opPopCall).writeInt(len(args))
 		case literal:
 			switch first.value {
-			case "and":
+			case keywordAnd:
 				emitAnd(v, cur)
-			case "or":
+			case keywordOr:
 				emitOr(v, cur)
-			case "not":
+			case keywordNot:
 				emitNot(v, cur)
-			case "if":
+			case keywordIf:
 				emitIf(v, cur)
 			case "+":
 				emitMultiOp(v, cur, opAdd)
@@ -270,9 +270,9 @@ func emit(node any, cur *VMByteCode) {
 				emitBinaryOp(v, cur, opCmp, cmpFlagLt)
 			case "gt":
 				emitBinaryOp(v, cur, opCmp, cmpFlagGt)
-			case "setq":
+			case keywordSetq:
 				emitSetq(v, cur)
-			case "list":
+			case keywordList:
 				emitList(consToList(v), cur)
 			case "make-hash-table":
 				emitMakeHashTable(cur)
@@ -290,23 +290,23 @@ func emit(node any, cur *VMByteCode) {
 				emitAppendVector(consToList(v).tail(), cur)
 			case "dolist":
 				emitDoList(v, cur)
-			case "defun":
+			case keywordDefun:
 				emitDefineFunction(v, cur)
-			case "defmacro":
+			case keywordDefmacro:
 				emitDefineMacros(v, cur)
-			case "macroexpand":
+			case keywordMacroexpand:
 				emitMacroExpand(v, cur)
 			case keywordBacktick:
 				emitBacktick(v.second, cur)
 			case keywordQuote:
 				emitQuote(v.second, cur)
-			case "lambda":
+			case keywordLambda:
 				emitLambda(v, cur)
-			case "progn":
+			case keywordProgn:
 				emitProgn(v, cur)
-			case "print":
+			case keywordPrint:
 				emitPrint(v, cur)
-			case "while":
+			case keywordWhile:
 				emitWhile(v, cur)
 			default:
 				l := consToList(v)
