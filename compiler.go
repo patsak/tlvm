@@ -308,6 +308,8 @@ func emit(node any, cur *VMByteCode) {
 				emitPrint(v, cur)
 			case keywordWhile:
 				emitWhile(v, cur)
+			case keywordLen:
+				emitLen(consToList(v).tail(), cur)
 			default:
 				l := consToList(v)
 				if _, ok := cur.macrosByName[l.headLiteralValue()]; ok {
@@ -330,8 +332,13 @@ func emit(node any, cur *VMByteCode) {
 	case literal:
 		emitLiteral(v, cur)
 	default:
-		panic(errorx.IllegalFormat.New("unexpected value %v with type %t", v, v))
+		panic(errorx.IllegalFormat.New("unexpected value %v with type %T", v, v))
 	}
+}
+
+func emitLen(v SExpressions, cur *VMByteCode) {
+	emit(v[0], cur)
+	cur.writeOpCode(opLen)
 }
 
 func emitSeth(args SExpressions, cur *VMByteCode) {

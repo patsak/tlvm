@@ -26,6 +26,7 @@ const (
 	keywordNot         = "not"
 	keywordAnd         = "and"
 	keywordList        = "list"
+	keywordLen         = "len"
 )
 
 func Read(sourceCode string) (SExpressions, error) {

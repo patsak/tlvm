@@ -55,6 +55,7 @@ const (
 	opSetVectorValue
 	opAppendVectorValue
 	opGetVectorValue
+	opLen
 )
 
 const (
@@ -202,6 +203,8 @@ func (v *VM) CodeString() string {
 			b.WriteString("GET_VECTOR_VALUE")
 		case opAppendVectorValue:
 			b.WriteString("APPEND_VECTOR_VALUE")
+		case opLen:
+			b.WriteString("LEN")
 		case opHalt:
 		default:
 			panic(errorx.IllegalFormat.New("unknown code %d", o))
@@ -528,6 +531,19 @@ func (v *VM) Execute() (errRes error) {
 			n := v.pop()
 			m = append(m, n)
 			v.push(m)
+		case opLen:
+			var l int
+			switch tv := v.pop().(type) {
+			case []any:
+				l = len(tv)
+			case map[any]any:
+				l = len(tv)
+			case *cons:
+				l = len(consToList(tv))
+			default:
+				panic(errorx.Panic(errorx.IllegalArgument.New("can't get length from type %T", tv)))
+			}
+			v.push(l)
 		case opNoOp:
 		case opHalt:
 			return

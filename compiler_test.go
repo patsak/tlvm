@@ -207,6 +207,32 @@ func TestCommonOperators(t *testing.T) {
 `,
 			result: "bar2",
 		},
+		{
+			name: "lenVector",
+			code: stdMacroses + `
+(setq t (make-vector))
+(appendvs t "bar1")
+(len t)
+`,
+			result: 1,
+		},
+		{
+			name: "lenList",
+			code: stdMacroses + `
+(len (list 1 2 3 4))
+`,
+			result: 4,
+		},
+		{
+			name: "lenHashTable",
+			code: `
+(setq t (make-hash-table))
+(seth t "foo1" "bar1")
+(seth t "foo2" "bar2")
+(len t)
+`,
+			result: 2,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vmCode, err := Compile(tc.code, tc.options...)
