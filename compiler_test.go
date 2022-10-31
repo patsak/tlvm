@@ -233,6 +233,16 @@ func TestCommonOperators(t *testing.T) {
 `,
 			result: 2,
 		},
+		{
+			name: "globalVariable",
+			code: `
+(setq s 10)
+(setq f (lambda (a) (setq s (+ s a))))
+(f 10)
+s
+`,
+			result: 20,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vmCode, err := Compile(tc.code, tc.options...)
@@ -322,12 +332,56 @@ func TestMacroExpand(t *testing.T) {
 			name:           "RestArgs",
 			macros:         forRangeMacro,
 			input:          "(forRange i 0 10 (setq new (+ acc i)) (setq acc new)))",
-			expectedExpand: "(progn (setq i 0) (while (lt i 10) (setq new (+ acc i)) (setq acc new)))",
+			expectedExpand: "(progn (setq i 0) (while (lt i 10) (setq new (+ acc i)) (setq acc new) (setq i (+ i 1))))",
+		},
+		{
+			name:           "ForEach",
+			macros:         forEachMacro,
+			input:          "(forEach v (lambda (a) (+ c a))))",
+			expectedExpand: "(progn (setq ff (lambda (a) (+ c a))) (forRange i 0 (len v) (ff (getv v i))))",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.EqualValues(t, tc.expectedExpand, compileAndRun(t, tc.macros+`
 	(macroexpand '`+tc.input))
+		})
+	}
+}
+
+func TestStdMacro(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		code    string
+		options []CompileOption
+		result  any
+	}{
+		{
+			name: "forEach",
+			code: `
+(setq v "abc")
+(setq c "")
+
+;(forRange i 0 (len v) (ff (getv v i)))
+(forEach v (lambda (a) (setq c (+ c a))))
+c
+`,
+			result: "abc",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fmt.Printf(stdMacroses + tc.code)
+			vmCode, err := Compile(stdMacroses+tc.code, tc.options...)
+			require.NoError(t, err)
+
+			vm := NewVM(vmCode)
+			fmt.Printf("%s\n", vm.CodeString())
+			require.NoError(t, vm.Execute(), tc.code)
+			switch vm.Result().(type) {
+			case *cons:
+				require.EqualValues(t, tc.result, fmt.Sprintf("%s", vm.Result()))
+			default:
+				require.EqualValues(t, tc.result, vm.Result())
+			}
 		})
 	}
 }
