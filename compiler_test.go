@@ -361,7 +361,6 @@ func TestStdMacro(t *testing.T) {
 (setq v "abc")
 (setq c "")
 
-;(forRange i 0 (len v) (ff (getv v i)))
 (forEach v (lambda (a) (setq c (+ c a))))
 c
 `,

@@ -256,39 +256,39 @@ func emit(node any, cur *VMByteCode) {
 				emitNot(v, cur)
 			case keywordIf:
 				emitIf(v, cur)
-			case "+":
+			case keywordPlus:
 				emitMultiOp(v, cur, opAdd)
-			case "-":
+			case keywordSub:
 				emitBinaryOp(v, cur, opSub)
-			case "/":
+			case keywordDiv:
 				emitBinaryOp(v, cur, opDiv)
-			case "*":
+			case keywordMul:
 				emitBinaryOp(v, cur, opMul)
-			case "eq":
+			case keywordEq:
 				emitBinaryOp(v, cur, opCmp, cmpFlagEq)
-			case "lt":
+			case keywordLt:
 				emitBinaryOp(v, cur, opCmp, cmpFlagLt)
-			case "gt":
+			case keywordGt:
 				emitBinaryOp(v, cur, opCmp, cmpFlagGt)
 			case keywordSetq:
 				emitSetq(v, cur)
 			case keywordList:
 				emitList(consToList(v), cur)
-			case "make-hash-table":
+			case keywordMakeHashTable:
 				emitMakeHashTable(cur)
-			case "seth":
+			case keywordSetH:
 				emitSeth(consToList(v).tail(), cur)
-			case "geth":
+			case keywordGetH:
 				emitGeth(consToList(v).tail(), cur)
-			case "make-vector":
+			case keywordMakeVector:
 				emitMakeVector(cur)
-			case "setv":
+			case keywordSetV:
 				emitSetv(consToList(v).tail(), cur)
-			case "getv":
+			case keywordGetV:
 				emitGetv(consToList(v).tail(), cur)
-			case "appendv":
+			case keywordAppendv:
 				emitAppendVector(consToList(v).tail(), cur)
-			case "dolist":
+			case keywordDoList:
 				emitDoList(v, cur)
 			case keywordDefun:
 				emitDefineFunction(v, cur)
