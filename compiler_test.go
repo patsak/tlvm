@@ -243,6 +243,13 @@ s
 `,
 			result: 20,
 		},
+		{
+			name: "appendList",
+			code: `
+(append (list 1 2 3) 4)
+`,
+			result: "(1 2 3 4)",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vmCode, err := Compile(tc.code, tc.options...)

@@ -287,7 +287,7 @@ func emit(node any, cur *VMByteCode) {
 			case keywordGetV:
 				emitGetv(consToList(v).tail(), cur)
 			case keywordAppendv:
-				emitAppendVector(consToList(v).tail(), cur)
+				emitAppend(consToList(v).tail(), cur)
 			case keywordDoList:
 				emitDoList(v, cur)
 			case keywordDefun:
@@ -882,10 +882,10 @@ func emitGetv(args SExpressions, cur *VMByteCode) {
 	cur.writeOpCode(opGetVectorValue)
 }
 
-func emitAppendVector(args SExpressions, cur *VMByteCode) {
+func emitAppend(args SExpressions, cur *VMByteCode) {
 	emit(args[1], cur)
 	emit(args[0], cur)
-	cur.writeOpCode(opAppendVectorValue)
+	cur.writeOpCode(opAppend)
 }
 
 func emitLiteral(v literal, cur *VMByteCode) {
@@ -1063,6 +1063,23 @@ func (c *scope) resolveAddress(v any) (ptrAndType, bool) {
 
 func consToList(c *cons) SExpressions {
 	return consToListN(c, -1)
+}
+
+func lastCons(c *cons) *cons {
+	if c == nil {
+		errorx.Panic(errorx.IllegalArgument.New("arg is nil"))
+	}
+	cur := c
+	for {
+		switch v := cur.second.(type) {
+		case *cons:
+			cur = v
+		case nil:
+			return cur
+		default:
+			errorx.Panic(errorx.IllegalArgument.New("cons second arg must be *cons or nil"))
+		}
+	}
 }
 
 func consToListN(c *cons, n int) SExpressions {

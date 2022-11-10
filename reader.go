@@ -28,7 +28,7 @@ const (
 	keywordList          = "list"
 	keywordLen           = "len"
 	keywordDoList        = "dolist"
-	keywordAppendv       = "appendv"
+	keywordAppendv       = "append"
 	keywordGetV          = "getv"
 	keywordSetV          = "setv"
 	keywordMakeVector    = "make-vector"

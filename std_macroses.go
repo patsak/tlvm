@@ -9,7 +9,7 @@ func registerMacros(m string) string {
 
 var appendAndSetMacro = registerMacros(`
 (defmacro appendvs (v e)
-	` + "`(setq ,v (appendv ,v ,e))" + `
+	` + "`(setq ,v (append ,v ,e))" + `
 	)
 `)
 

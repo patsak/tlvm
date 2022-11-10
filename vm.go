@@ -53,7 +53,7 @@ const (
 	opGetHashTableValue
 	opMakeVector
 	opSetVectorValue
-	opAppendVectorValue
+	opAppend
 	opGetVectorValue
 	opLen
 )
@@ -201,8 +201,8 @@ func (v *VM) CodeString() string {
 			b.WriteString("SET_VECTOR_VALUE")
 		case opGetVectorValue:
 			b.WriteString("GET_VECTOR_VALUE")
-		case opAppendVectorValue:
-			b.WriteString("APPEND_VECTOR_VALUE")
+		case opAppend:
+			b.WriteString("APPEND")
 		case opLen:
 			b.WriteString("LEN")
 		case opHalt:
@@ -537,10 +537,17 @@ func (v *VM) Execute() (errRes error) {
 				errorx.Panic(errorx.IllegalArgument.New("unexpected type %T for GETV operation", vect))
 			}
 			v.push(pv)
-		case opAppendVectorValue:
-			m := v.pop().([]any)
+		case opAppend:
+			m := v.pop()
 			n := v.pop()
-			m = append(m, n)
+
+			switch vv := m.(type) {
+			case []any:
+				vv = append(vv, n)
+				m = vv
+			case *cons:
+				lastCons(vv).second = &cons{first: n}
+			}
 			v.push(m)
 		case opLen:
 			var l int
