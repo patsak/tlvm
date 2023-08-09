@@ -24,7 +24,7 @@ func BenchmarkVM(b *testing.B) {
 	require.NoError(b, vm.Execute())
 	require.EqualValues(b, fact(15), vm.Result())
 
-	b.Run("VM", func(b *testing.B) {
+	b.Run("FactVM", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			vm.Reset()
@@ -32,10 +32,28 @@ func BenchmarkVM(b *testing.B) {
 		}
 	})
 
-	b.Run("Go", func(b *testing.B) {
+	b.Run("FactGo", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			fact(15)
+		}
+	})
+
+	b.Run("ConcatVM", func(b *testing.B) {
+		bin, err := Compile(`(+ "a" "b")`)
+		require.NoError(b, err)
+		vm := NewVM(bin)
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			vm.Reset()
+			vm.Execute()
+		}
+	})
+
+	b.Run("ConcatGO", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			_ = "a" + "b"
 		}
 	})
 }
