@@ -42,6 +42,7 @@ const (
 	keywordDiv           = "/"
 	keywordPlus          = "+"
 	keywordSub           = "-"
+	keywordContains      = "contains"
 )
 
 func Read(sourceCode string) (SExpressions, error) {
@@ -203,6 +204,12 @@ func (r *tokenReader) read() (_ any, err error) {
 				panic(err)
 			}
 			return str{s, r.pos}, nil
+		case tok.value == "true" || tok.value == "false":
+			v, err := strconv.ParseBool(tok.value)
+			if err != nil {
+				panic(err)
+			}
+			return boolean{v, r.pos}, nil
 		case unicode.IsDigit(rune(tok.value[0])) || ((tok.value[0] == '-' || tok.value[0] == '+') && len(tok.value) > 1):
 			n, err := strconv.ParseInt(tok.value, 10, 64)
 			if err != nil {

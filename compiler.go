@@ -310,6 +310,8 @@ func emit(node any, cur *VMByteCode) {
 				emitWhile(v, cur)
 			case keywordLen:
 				emitLen(consToList(v).tail(), cur)
+			case keywordContains:
+				emitContains(consToList(v).tail(), cur)
 			default:
 				l := consToList(v)
 				if _, ok := cur.macrosByName[l.headLiteralValue()]; ok {
@@ -319,7 +321,7 @@ func emit(node any, cur *VMByteCode) {
 				}
 			}
 		}
-	case int64, float64, string, str, float, number:
+	case int64, float64, string, str, float, number, boolean:
 		vt := v
 		var ok bool
 		valueWithPos, ok := v.(valueAndPosition)
@@ -486,6 +488,12 @@ func emitFunction(name string, expr SExpressions, cur *VMByteCode) closure {
 	emitReturn(fn, cur)
 
 	return fn
+}
+
+func emitContains(v SExpressions, cur *VMByteCode) {
+	emit(v[1], cur)
+	emit(v[0], cur)
+	cur.writeOpCode(opContains)
 }
 
 func emitReturn(cl closure, cur *VMByteCode) {

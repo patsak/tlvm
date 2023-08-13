@@ -196,6 +196,15 @@ func TestCommonOperators(t *testing.T) {
 			result: "bar1",
 		},
 		{
+			name: "containsHashTable",
+			code: `
+(setq t (make-hash-table))
+(seth t "foo1" "bar1")
+(contains t "foo1")
+`,
+			result: true,
+		},
+		{
 			name: "vector",
 			code: stdMacroses + `
 (setq t (make-vector))
@@ -206,6 +215,15 @@ func TestCommonOperators(t *testing.T) {
 (getv t 1)
 `,
 			result: "bar2",
+		},
+		{
+			name: "containsVector",
+			code: stdMacroses + `
+(setq t (make-vector))
+(appendvs t "foo1")
+(contains t "foo1")
+`,
+			result: true,
 		},
 		{
 			name: "lenVector",
@@ -296,6 +314,13 @@ func TestEnvVariables(t *testing.T) {
 		vm.EnvInt64("n", 1)
 		require.NoError(t, vm.Execute())
 		require.EqualValues(t, 2, vm.Result())
+	})
+
+	t.Run("String", func(t *testing.T) {
+		vm := NewVM(compile(t, "(eq foo \"bar\")", EnvVariables("foo")))
+		vm.Env("foo", "bar")
+		require.NoError(t, vm.Execute())
+		require.Equal(t, true, vm.Result())
 	})
 
 	t.Run("Struct", func(t *testing.T) {

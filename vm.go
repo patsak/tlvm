@@ -56,6 +56,7 @@ const (
 	opAppend
 	opGetVectorValue
 	opLen
+	opContains
 )
 
 const (
@@ -205,6 +206,8 @@ func (v *VM) CodeString() string {
 			b.WriteString("APPEND")
 		case opLen:
 			b.WriteString("LEN")
+		case opContains:
+			b.WriteString("CONTAINS")
 		case opHalt:
 		default:
 			panic(errorx.IllegalFormat.New("unknown code %d", o))
@@ -564,6 +567,23 @@ func (v *VM) Execute() (errRes error) {
 				panic(errorx.Panic(errorx.IllegalArgument.New("can't get length from type %T", tv)))
 			}
 			v.push(l)
+		case opContains:
+			container := v.pop()
+			m := v.pop()
+
+			var res bool
+			switch c := container.(type) {
+			case map[any]any:
+				_, res = c[m]
+			case []any:
+				for _, e := range c {
+					if e == m {
+						res = true
+						break
+					}
+				}
+			}
+			v.push(res)
 		case opNoOp:
 		case opHalt:
 			return

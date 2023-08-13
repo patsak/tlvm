@@ -71,6 +71,19 @@ func (l float) valueAndPosition() (any, int) {
 	return l.value, l.pos
 }
 
+type boolean struct {
+	value bool
+	pos   int
+}
+
+func (l boolean) String() string {
+	return fmt.Sprintf("%t", l.value)
+}
+
+func (l boolean) valueAndPosition() (any, int) {
+	return l.value, l.pos
+}
+
 type cons struct {
 	second any
 	first  any
