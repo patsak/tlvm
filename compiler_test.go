@@ -256,10 +256,24 @@ func TestCommonOperators(t *testing.T) {
 			code: `
 (setq s 10)
 (setq f (lambda (a) (setq s (+ s a))))
+(defun inc () (setq s (+ s 1)))
 (f 10)
+(inc 0)
+`,
+			result: 21,
+		},
+		{
+			name: "globalVariableManyClosures",
+			code: `
+(setq s 10)
+(setq f (lambda (a) (setq s (+ s a))))
+(defun x2 () (f s))
+(f 10) ;; s == 20
+(x2) ;; s = 20 + 20
+(x2) ;; s = 40 + 40
 s
 `,
-			result: 20,
+			result: 80,
 		},
 		{
 			name: "appendList",

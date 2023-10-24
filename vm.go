@@ -83,6 +83,7 @@ type VM struct {
 	env                         map[any]ptr    // environment variables pointers
 	debugInfo                   map[int]string // debug string by instruction position
 	originalTextPositionPointer map[int]int    // position in original code text by instruction position
+	labels                      map[string]*closure
 }
 
 const callFrameOffset = 4
@@ -102,6 +103,8 @@ func NewVM(output *VMByteCode) *VM {
 	vm.sp = len(output.constList) - 1
 	vm.cp = vm.sp
 	vm.env = output.consts
+
+	vm.labels = output.labels
 	vm.debugInfo = output.debugInfo
 	vm.originalTextPositionPointer = output.origPositionPointer
 	return vm
@@ -255,7 +258,7 @@ func (vm *VM) EnvString(k string, v string) {
 }
 
 func (v *VM) Result() any {
-	return v.stack[v.sp]
+	return v.elem(v.stack[v.sp])
 }
 
 func (v *VM) Reset() {
@@ -286,36 +289,42 @@ func (v *VM) Execute() (errRes error) {
 		switch opCode(o) {
 		case opPush:
 			a := v.stackAddrArg()
-			v.push(v.stack[a])
+			vv := v.stack[a]
+			v.push(vv)
 		case opPushClosureVal:
 			a := v.closureAddr()
-			v.push(*v.closure()[a])
+			vars := v.closureVars()
+			closureVar := vars[a]
+			v.push(v.elem(closureVar.value))
 		case opStoreClosureVal:
-			vv := v.pop()
+			r := v.pop()
 			a := v.closureAddr()
-			vptr := v.closure()[a]
-			*vptr = vv
+			vars := v.closureVars()
+			vptr := vars[a]
+			v.store(vptr.value, r)
+
 		case opPushClosure:
 			ip := v.ipAddrArg()
 			n := v.readInt()
 			rest := v.readBool()
-
 			nClosureVars := v.readInt()
-			var closureVars []*any
+			var closureVars []closureVariable
 			for i := 0; i < nClosureVars; i++ {
 				vt := valType(v.next())
 				varPtr := v.readPtr()
+				vv := closureVariable{addr: varPtr, vt: vt}
 				switch vt {
 				case valTypeClosure:
-					closureVars = append(closureVars, v.closure()[varPtr.abs(0)])
+					clVars := v.closureVars()
+					vv.value = clVars[varPtr.abs(0)].value
 				case valTypeLocal:
-					vv := v.stack[varPtr.abs(v.bp)]
-					closureVars = append(closureVars, &vv)
-				case valTypeGlobal:
-					closureVars = append(closureVars, &v.stack[varPtr.abs(v.bp)])
+					nvv := v.stack[varPtr.abs(v.bp)] // copy local value
+					v.stack[varPtr.abs(v.bp)] = &nvv
+					vv.value = &nvv
 				default:
 					errorx.Panic(errorx.IllegalState.New("unexpected value type %d in closure", vt))
 				}
+				closureVars = append(closureVars, vv)
 			}
 
 			v.push(&closure{addr: ip, nargs: n, varargs: rest, values: closureVars})
@@ -333,7 +342,11 @@ func (v *VM) Execute() (errRes error) {
 		case opStore:
 			vv := v.pop()
 			a := v.stackAddrArg()
-			v.stack[a] = vv
+			if e, ok := v.stack[a].(*any); ok {
+				*e = v.elem(vv)
+			} else {
+				v.stack[a] = v.elem(vv)
+			}
 		case opCmp:
 			v2 := v.pop()
 			v1 := v.pop()
@@ -433,23 +446,41 @@ func (v *VM) Execute() (errRes error) {
 			if nargs != cl.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
 			}
+			var vars []closureVariable
+			for _, vv := range cl.values {
+				switch vv.vt {
+				case valTypeGlobal, valTypeLocal:
+					p := vv.addr.abs(v.bp)
+					vv.value = &v.stack[p]
+				case valTypeClosure:
+					p := vv.addr.abs(v.bp)
+					sv := &v.stack[p]
+					vv.value = sv
+				}
+
+				vars = append(vars, vv)
+			}
 			v.pushRestArgIfNeeded(nargs, cl)
 
 			addr := cl.addr
 			v.push(cl.nargs)
-			v.push(cl.values)
+			v.push(vars)
 			v.push(v.bp)
 			v.push(v.ip)
 			v.bp = v.sp - callFrameOffset
 			v.goTo(addr)
 		case opPopCall:
-			cl := v.pop().(*closure)
+			cl, ok := v.pop().(*closure)
+			if !ok {
+				errorx.Panic(errorx.IllegalState.New("can't cast"))
+			}
 			nargs := v.readInt()
 
 			if !cl.varargs && nargs != cl.nargs ||
 				cl.varargs && nargs < cl.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
 			}
+
 			v.pushRestArgIfNeeded(nargs, cl)
 			addr := cl.addr
 			v.push(cl.nargs)
@@ -624,15 +655,32 @@ func (v *VM) readBool() bool {
 }
 
 func (v *VM) stackAddrArg() ptr {
-	return v.readPtr().abs(v.bp)
+	ptr := v.readPtr()
+	return ptr.abs(v.bp)
 }
 
 func (v *VM) closureAddr() ptr {
 	return v.readPtr().abs(0)
 }
 
-func (v *VM) closure() []*any {
-	return v.stack[v.bp+2].([]*any)
+func (v *VM) closureVars() []closureVariable {
+	return v.stack[v.bp+2].([]closureVariable)
+}
+
+func (v *VM) elem(a any) any {
+	if e, ok := a.(*any); ok {
+		return *e
+	} else {
+		return a
+	}
+}
+
+func (v *VM) store(t any, s any) {
+	if e, ok := t.(*any); ok {
+		*e = v.elem(s)
+	} else {
+		t = v.elem(s)
+	}
 }
 
 func (v *VM) ipAddrArg() ptr {
@@ -654,6 +702,12 @@ func (v *VM) next() byte {
 }
 
 func (v *VM) pop() any {
+	ret := v.elem(v.stack[v.sp])
+	v.sp--
+	return ret
+}
+
+func (v *VM) popRaw() any {
 	ret := v.stack[v.sp]
 	v.sp--
 	return ret

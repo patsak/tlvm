@@ -436,20 +436,46 @@ func emitMultiOp(cc *cons, cur *VMByteCode, op opCode) {
 
 func emitDefineFunction(cc *cons, cur *VMByteCode) {
 	l := consToList(cc).tail()
+	var endLambdaAddress ptr
+	var startDefinitionAddress ptr
 
-	code := cur.code
-	cur.code = cur.definedFunctions
+	cur.writeOpCode(opJmp).iptr(&endLambdaAddress).writeEmptyAddress().iptr(&startDefinitionAddress)
 
-	defer func() {
-		cur.definedFunctions = cur.code
-		cur.code = code
-	}()
 	cur.inNewScope(scopeTypeStackFrame, func() {
-		emitFunction(l.headLiteralValue(), l.tail(), cur)
+		fn := emitFunction(l.headLiteralValue(), l[1:], cur)
+		fn.constAddr = cur.constAddr(fn)
+		funcDefinitionLength := cur.pos() - startDefinitionAddress
+		cur.modify(endLambdaAddress, offsetAddress(int(funcDefinitionLength)))
+
+		type closureVar struct {
+			stackAddr  ptr
+			vt         valType
+			closurePtr ptr
+		}
+		var localAddresses []closureVar
+		for _, boundVar := range cur.scope.getBoundVariables() {
+			parentFrameAddress, ok := cur.scope.parentScope.boundFrameAddress(boundVar.value)
+			if !ok {
+				errorx.Panic(errorx.IllegalState.New("closure variable must exists in local variables in parent scope"))
+			}
+			localAddresses = append(localAddresses, closureVar{parentFrameAddress.ptr, valTypeClosure, boundVar.ptr})
+		}
+
+		sort.Slice(localAddresses, func(i, j int) bool {
+			return localAddresses[i].closurePtr < localAddresses[j].closurePtr
+		})
+
+		// write closure variables count
+		for _, a := range localAddresses {
+			fn.values = append(fn.values, closureVariable{
+				vt:   a.vt,
+				addr: a.stackAddr,
+			})
+		}
 	})
 }
 
-func emitFunction(name string, expr SExpressions, cur *VMByteCode) closure {
+func emitFunction(name string, expr SExpressions, cur *VMByteCode) *closure {
 	cur.scope.addressOffset[valTypeLocal] = callFrameOffset + 1 // skip stack entries stored by CALL opcode
 
 	cur.debug("define function %s", name)
@@ -487,7 +513,7 @@ func emitFunction(name string, expr SExpressions, cur *VMByteCode) closure {
 
 	emitReturn(fn, cur)
 
-	return fn
+	return &fn
 }
 
 func emitContains(v SExpressions, cur *VMByteCode) {
@@ -533,7 +559,6 @@ func emitReturn(cl closure, cur *VMByteCode) {
 
 func emitCallFunction(cc *cons, cur *VMByteCode) {
 	args := consToList(cc)
-
 	if extFunc, ok := cur.externalFunctions[args.headLiteralValue()]; ok {
 		nargs := emitArgs(args.tail(), cur)
 		cur.writeOpCode(opPush).writePointer(cur.constAddr(extFunc))
@@ -543,10 +568,12 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 	}
 
 	functionName := args.headLiteralValue()
-	if fVariable, hasVariable := cur.scope.resolveAddress(functionName); hasVariable {
+	if _, hasVariable := cur.scope.resolveAddress(functionName); hasVariable {
 		nargs := emitArgs(args.tail(), cur)
+		emit(args.head(), cur)
+
 		cur.debug("call closure %s", functionName)
-		cur.writeOpCode(opClosureCall).writePointer(fVariable.ptr).writeInt(nargs)
+		cur.writeOpCode(opPopCall).writeInt(nargs)
 		return
 	}
 
@@ -554,7 +581,20 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 		fargs := consToListN(cc, fAddress.nargs+1)
 		emitArgs(fargs[1:], cur)
 		cur.debug("call function %s", functionName)
-		cur.writeOpCode(opCall).writePointer(fAddress.addr).writeInt(fAddress.nargs)
+		isClosure := false
+		for _, v := range fAddress.values {
+			if v.vt == valTypeClosure {
+				isClosure = true
+				break
+			}
+		}
+
+		if isClosure {
+			cur.writeOpCode(opClosureCall).writePointer(fAddress.constAddr).writeInt(fAddress.nargs)
+		} else {
+			cur.writeOpCode(opCall).writePointer(fAddress.addr).writeInt(fAddress.nargs)
+		}
+
 		return
 	}
 
@@ -594,6 +634,7 @@ func emitIf(cc *cons, cur *VMByteCode) {
 
 func emitSetq(cc *cons, cur *VMByteCode) {
 	l := consToList(cc).tail()
+
 	variableName := l.headLiteralValue()
 	rightValue := l[1]
 	emit(rightValue, cur)
@@ -826,7 +867,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 		}
 
 		sort.Slice(localAddresses, func(i, j int) bool {
-			return localAddresses[i].closurePtr < localAddresses[j].closurePtr
+			return localAddresses[i].closurePtr <= localAddresses[j].closurePtr
 		})
 
 		// write closure variables count
@@ -1015,9 +1056,6 @@ func (c *scope) boundFrameAddress(v any) (ptrAndType, bool) {
 
 	localAddr, ok := c.variablePointer[v]
 	if ok {
-		if localAddr.tp == valTypeLocal && c.isRoot() {
-			localAddr.tp = valTypeGlobal
-		}
 		return localAddr, true
 	}
 
@@ -1042,13 +1080,10 @@ func (c *scope) resolveAddress(v any) (ptrAndType, bool) {
 		if s == nil {
 			return ptrAndType{}, false
 		}
-		vv, ok := s.variablePointer[v]
-		if ok && (vv.tp == valTypeLocal || vv.tp == valTypeConst) {
-			if s.parentScope != nil && c.scopeType == scopeTypeStackFrame {
+		_, ok := s.variablePointer[v]
+		if ok {
+			if c.scopeType == scopeTypeStackFrame {
 				return c.createNextAddr(v, valTypeClosure), true
-			}
-			if s.parentScope == nil && c.scopeType == scopeTypeStackFrame {
-				return c.createNextAddr(v, valTypeGlobal), true
 			}
 
 			return s.variablePointer[v], true
