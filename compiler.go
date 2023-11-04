@@ -645,7 +645,7 @@ func emitSetq(cc *cons, cur *VMByteCode) {
 	}
 
 	switch addr.tp {
-	case valTypeClosure, valTypeGlobal:
+	case valTypeClosure:
 		cur.writeOpCode(opStoreClosureVal).writePointer(addr.ptr)
 		cur.writeOpCode(opPushClosureVal).writePointer(addr.ptr)
 	case valTypeLocal:
@@ -947,7 +947,7 @@ func emitLiteral(v literal, cur *VMByteCode) {
 		}
 	}
 	switch addr.tp {
-	case valTypeClosure, valTypeGlobal:
+	case valTypeClosure:
 		cur.writeOpCode(opPushClosureVal).writePointer(addr.ptr)
 	case valTypeLocal, valTypeConst:
 		if len(parts) == 1 {
@@ -966,7 +966,6 @@ const (
 	valTypeConst valType = iota
 	valTypeClosure
 	valTypeLocal
-	valTypeGlobal
 )
 
 type scope struct {

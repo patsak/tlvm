@@ -449,7 +449,7 @@ func (v *VM) Execute() (errRes error) {
 			var vars []closureVariable
 			for _, vv := range cl.values {
 				switch vv.vt {
-				case valTypeGlobal, valTypeLocal:
+				case valTypeLocal:
 					p := vv.addr.abs(v.bp)
 					vv.value = &v.stack[p]
 				case valTypeClosure:
