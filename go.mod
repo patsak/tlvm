@@ -1,6 +1,6 @@
 module github.com/patsak/tlvm
 
-go 1.18
+go 1.23
 
 require (
 	github.com/joomcode/errorx v1.1.0

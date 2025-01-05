@@ -2,6 +2,8 @@ package tlvm
 
 import (
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -85,9 +87,48 @@ func (l boolean) valueAndPosition() (any, int) {
 }
 
 type cons struct {
-	second any
-	first  any
-	pos    int
+	expr []any
+	pos  int
+}
+
+func (c *cons) first() any {
+	if c == nil {
+		return nil
+	}
+	if len(c.expr) == 0 {
+		return nil
+	}
+	return c.expr[len(c.expr)-1]
+}
+
+func (c cons) tail() *cons {
+	if len(c.expr) < 2 {
+		return nil
+	}
+	c.expr = c.expr[:len(c.expr)-1]
+	return &c
+}
+
+func (c *cons) concat(e any) {
+	c.expr = append(c.expr, e)
+}
+
+type consBuilder struct {
+	expr []any
+}
+
+func newConsBuilder() consBuilder {
+	return consBuilder{}
+}
+
+func (c *consBuilder) append(e any) {
+	c.expr = append(c.expr, e)
+}
+
+func (c *consBuilder) build() *cons {
+	v := &cons{expr: c.expr}
+	slices.Reverse(v.expr)
+	return v
 }
 
 func (l *cons) valueAndPosition() (any, int) {
@@ -145,7 +186,7 @@ type closure struct {
 }
 
 type closureVariable struct {
-	value *any
+	value reflect.Value
 	vt    valType
 	addr  ptr
 }

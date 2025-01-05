@@ -36,7 +36,9 @@ const (
 	keywordGetH          = "geth"
 	keywordSetH          = "seth"
 	keywordLt            = "lt"
+	keywordLte           = "lte"
 	keywordGt            = "gt"
+	keywordGte           = "gte"
 	keywordEq            = "eq"
 	keywordMul           = "*"
 	keywordDiv           = "/"
@@ -167,27 +169,25 @@ func (r *tokenReader) read() (_ any, err error) {
 
 		switch {
 		case tok.value == "(":
-			firstCons := &cons{}
+			consBuilder := newConsBuilder()
 			if r.hasNext() && r.peek().value != ")" {
-				firstCons.first, err = r.read()
+				v, err := r.read()
 				if err != nil {
 					return nil, err
 				}
+				consBuilder.append(v)
 			}
-			currentCons := firstCons
 			for r.hasNext() && r.peek().value != ")" {
-				nextCons := &cons{}
-				nextCons.first, err = r.read()
+				v, err := r.read()
 				if err != nil {
 					return nil, err
 				}
-				currentCons.second = nextCons
-				currentCons = nextCons
+				consBuilder.append(v)
 			}
 			if r.hasNext() {
 				r.next()
 			}
-			return firstCons, nil
+			return consBuilder.build(), nil
 		case tok.value == "'":
 			return r.wrapInCons(keywordQuote, tok.pos)
 		case tok.value == "`":
@@ -234,5 +234,5 @@ func (r *tokenReader) wrapInCons(name string, pos int) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &cons{first: literal{name, pos}, second: s}, nil
+	return &cons{expr: []any{s, literal{name, pos}}}, nil
 }

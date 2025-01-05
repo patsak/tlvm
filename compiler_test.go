@@ -290,11 +290,13 @@ s
 			vm := NewVM(vmCode)
 			fmt.Printf("%s\n", vm.CodeString())
 			require.NoError(t, vm.Execute(), tc.code)
-			switch vm.Result().(type) {
-			case *cons:
-				require.EqualValues(t, tc.result, fmt.Sprintf("%s", vm.Result()))
+			switch vv := vm.Result().(type) {
+			case cons, *cons:
+				require.EqualValues(t, tc.result, fmt.Sprintf("%s", vv))
+			case *int64:
+				require.EqualValues(t, tc.result, *vv)
 			default:
-				require.EqualValues(t, tc.result, vm.Result())
+				require.EqualValues(t, tc.result, vv)
 			}
 		})
 	}
@@ -345,6 +347,18 @@ func TestEnvVariables(t *testing.T) {
 		vm.Env("n", input{C: 3})
 		require.NoError(t, vm.Execute())
 		require.EqualValues(t, 4, vm.Result())
+	})
+
+	t.Run("AssignStructField", func(t *testing.T) {
+		type input struct {
+			C int64
+		}
+		v := &input{C: 3}
+		vm := NewVM(compile(t, "(setq n.C 1)", EnvVariables("n")))
+		vm.Env("n", &input{C: 3})
+		fmt.Printf("%s", vm.CodeString())
+		require.NoError(t, vm.Execute())
+		require.EqualValues(t, 1, v.C)
 	})
 
 	t.Run("NotExists", func(t *testing.T) {

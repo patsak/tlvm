@@ -1,6 +1,7 @@
 package tlvm
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,7 @@ func BenchmarkVM(b *testing.B) {
 )
 (fact 15)
 `
+
 	bin, err := Compile(code)
 	require.NoError(b, err)
 
@@ -29,6 +31,41 @@ func BenchmarkVM(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			vm.Reset()
 			vm.Execute()
+		}
+	})
+
+	b.Run("BaseExprVM", func(b *testing.B) {
+		codeConcat := `
+(and 
+	(or (eq Origin "MOW") (eq Country "RU")) 
+	(or (eq Adults 1) (gte Value 100))
+)
+`
+		bin, err := Compile(codeConcat, EnvVariables("Origin", "Country", "Value", "Adults"))
+		require.NoError(b, err)
+
+		vm := NewVM(bin)
+		vm.Env("Origin", "MOW")
+		vm.Env("Country", "RU")
+		vm.EnvInt("Value", 100)
+		vm.EnvInt("Adults", 1)
+		fmt.Print(vm.CodeString())
+		require.NoError(b, vm.Execute())
+		require.EqualValues(b, true, vm.Result())
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			vm.Reset()
+			vm.Execute()
+		}
+	})
+
+	b.Run("BaseExprGO", func(b *testing.B) {
+		f := func(Origin, Country string, Value, Adults int) bool {
+			return (Origin == "MOW" || Country == "RU") && (Adults == 1 || Value >= 100)
+		}
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			f("MOW", "RU", 100, 1)
 		}
 	})
 

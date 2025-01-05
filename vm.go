@@ -24,6 +24,7 @@ const (
 	opPushClosure
 	opPushField
 	opStore
+	opStoreIndirection
 	opPop
 	opCmp
 	opAdd
@@ -73,7 +74,7 @@ const (
 )
 
 type VM struct {
-	stack                       [256]any
+	stack                       [256]reflect.Value
 	code                        []byte         // byte code
 	cp                          int            // constants top pointer
 	ep                          int            // entry point
@@ -151,6 +152,8 @@ func (v *VM) CodeString() string {
 			b.WriteString(fmt.Sprintf("CLOSURECALL %s %s", v.strStackAddr(), v.strStackAddr()))
 		case opStore:
 			b.WriteString(fmt.Sprintf("STORE %s", v.strStackAddr()))
+		case opStoreIndirection:
+			b.WriteString(fmt.Sprintf("STORE_INDIRECTION %s", v.strStackAddr()))
 		case opAdd:
 			b.WriteString(fmt.Sprintf("ADD"))
 		case opSub:
@@ -250,15 +253,15 @@ func (vm *VM) Env(k any, v any) {
 	if !ok {
 		return
 	}
-	vm.stack[pos] = v
+	vm.stack[pos] = reflect.ValueOf(v)
 }
 
 func (vm *VM) EnvString(k string, v string) {
-	vm.stack[vm.env[k]] = v
+	vm.stack[vm.env[k]] = reflect.ValueOf(v)
 }
 
 func (v *VM) Result() any {
-	return v.elem(v.stack[v.sp])
+	return v.stack[v.sp].Interface()
 }
 
 func (v *VM) Reset() {
@@ -295,7 +298,7 @@ func (v *VM) Execute() (errRes error) {
 			a := v.closureAddr()
 			vars := v.closureVars()
 			closureVar := vars[a]
-			v.push(v.elem(closureVar.value))
+			v.push(closureVar.value)
 		case opStoreClosureVal:
 			r := v.pop()
 			a := v.closureAddr()
@@ -319,111 +322,112 @@ func (v *VM) Execute() (errRes error) {
 					vv.value = clVars[varPtr.abs(0)].value
 				case valTypeLocal:
 					nvv := v.stack[varPtr.abs(v.bp)] // copy local value
-					v.stack[varPtr.abs(v.bp)] = &nvv
-					vv.value = &nvv
+					ptr := reflect.New(nvv.Type()).Elem()
+					ptr.Set(nvv)
+					v.stack[varPtr.abs(v.bp)] = ptr
+					vv.value = ptr
 				default:
 					errorx.Panic(errorx.IllegalState.New("unexpected value type %d in closure", vt))
 				}
 				closureVars = append(closureVars, vv)
 			}
 
-			v.push(&closure{addr: ip, nargs: n, varargs: rest, values: closureVars})
+			v.push(reflect.ValueOf(&closure{addr: ip, nargs: n, varargs: rest, values: closureVars}))
 		case opPushField:
 			variableAddr := v.stackAddrArg()
 			fieldPathAddr := v.stackAddrArg()
 			vv := v.stack[variableAddr]
-			path := v.stack[fieldPathAddr].(string)
-			rv := reflect.ValueOf(vv)
-
+			path := v.stack[fieldPathAddr].Interface().(string)
+			rv := vv
 			for _, p := range strings.Split(path, ".") {
 				rv = rv.FieldByName(p)
 			}
-			v.push(rv.Interface())
+			v.push(rv)
 		case opStore:
 			vv := v.pop()
 			a := v.stackAddrArg()
-			if e, ok := v.stack[a].(*any); ok {
-				*e = v.elem(vv)
-			} else {
-				v.stack[a] = v.elem(vv)
-			}
+			v.stack[a] = vv
 		case opCmp:
-			v2 := v.pop()
-			v1 := v.pop()
+			v2 := v.elem(v.pop())
+			v1 := v.elem(v.pop())
 
 			chFl := v.next()
-			switch v1.(type) {
-			case float64, float32:
-				v.push(cmp(castFloat(v1), castFloat(v2), chFl))
-			case int64, int32, int16, int:
-				v.push(cmp(castInt(v1), castInt(v2), chFl))
-			case string:
-				v.push(cmp(v1.(string), v2.(string), chFl))
+			switch v1.Kind() {
+			case reflect.Float64, reflect.Float32:
+				v.push(reflect.ValueOf(cmp(v1.Float(), v2.Float(), chFl)))
+			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Int8:
+				v.push(reflect.ValueOf(cmp(v1.Int(), v2.Int(), chFl)))
+			case reflect.String:
+				v.push(reflect.ValueOf(cmp(v1.String(), v2.String(), chFl)))
+			default:
+				errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for cmp operation", v1.Type()))
 			}
 		case opAdd:
-			v1 := v.pop()
-			v2 := v.pop()
-			switch vt := v2.(type) {
-			case float64, float32:
-				v.push(castFloat(vt) + castFloat(v1))
-			case int64, int, int32:
-				v.push(castInt(vt) + castInt(v1))
-			case string:
-				v.push(vt + v1.(string))
+			v1 := v.elem(v.pop())
+			v2 := v.elem(v.pop())
+			switch v1.Kind() {
+			case reflect.Float64, reflect.Float32:
+				v.push(reflect.ValueOf(v1.Float() + v2.Float()))
+			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Int8:
+				v.push(reflect.ValueOf(v1.Int() + v2.Int()))
+			case reflect.String:
+				v.push(reflect.ValueOf(v2.String() + v1.String()))
 			default:
-				errorx.Panic(errorx.IllegalArgument.New("unexpected type %T for ADD operation", vt))
+				errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for ADD operation", v1.Type()))
 			}
 		case opSub:
-			v1 := v.pop()
-			v2 := v.pop()
-			switch vt := v2.(type) {
-			case float64, float32:
-				v.push(castFloat(vt) - castFloat(v1))
-			case int64, int, int32:
-				v.push(castInt(vt) - castInt(v1))
+			v1 := v.elem(v.pop())
+			v2 := v.elem(v.pop())
+			switch v1.Kind() {
+			case reflect.Float64, reflect.Float32:
+				v.push(reflect.ValueOf(v2.Float() - v1.Float()))
+			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Int8:
+				v.push(reflect.ValueOf(v2.Int() - v1.Int()))
+
 			default:
-				errorx.Panic(errorx.IllegalArgument.New("unexpected type %T for SUB operation", vt))
+				errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for SUB operation", v1.Type()))
 			}
 		case opDiv:
-			v1 := v.pop()
-			v2 := v.pop()
-			switch vt := v2.(type) {
-			case float64, float32:
-				v.push(castFloat(vt) / castFloat(v1))
-			case int64, int, int32:
-				v.push(castInt(vt) / castInt(v1))
+			v1 := v.elem(v.pop())
+			v2 := v.elem(v.pop())
+			switch v1.Kind() {
+			case reflect.Float64, reflect.Float32:
+				v.push(reflect.ValueOf(v2.Float() / v1.Float()))
+			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Int8:
+				v.push(reflect.ValueOf(v2.Int() / v1.Int()))
+
 			default:
-				errorx.Panic(errorx.IllegalArgument.New("unexpected type %T for DIV operation", vt))
+				errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for DIV operation", v1.Type()))
 			}
 		case opMul:
-			v1 := v.pop()
-			v2 := v.pop()
-			switch vt := v2.(type) {
-			case float64, float32:
-				v.push(castFloat(vt) * castFloat(v1))
-			case int64, int, int32:
-				v.push(castInt(vt) * castInt(v1))
+			v1 := v.elem(v.pop())
+			v2 := v.elem(v.pop())
+			switch v2.Kind() {
+			case reflect.Int32, reflect.Int8, reflect.Int64, reflect.Int:
+				v.push(reflect.ValueOf(v2.Int() * v1.Int()))
+			case reflect.Float64, reflect.Float32:
+				v.push(reflect.ValueOf(v2.Float() * v1.Float()))
 			default:
-				errorx.Panic(errorx.IllegalArgument.New("unexpected type %T for MUL operation", vt))
+				errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for MUL operation", v2.Type()))
 			}
 		case opCmpBool:
-			v1 := v.pop().(bool)
-			v2 := v.pop().(bool)
+			v1 := v.elem(v.pop()).Bool()
+			v2 := v.elem(v.pop()).Bool()
 			chFl := v.next()
 
 			if chFl&cmpFlagEq > 0 {
-				v.push(v1 == v2)
+				v.push(reflect.ValueOf(v1 == v2))
 			}
 		case opTrue:
-			v1 := v.pop().(bool)
+			v1 := v.pop().Bool()
 			chFl := v.next()
 			if chFl&cmpFlagEq > 0 {
-				v.push(v1)
+				v.push(reflect.ValueOf(v1))
 			}
 		case opNil:
-			v.push(v.pop() == nil)
+			v.push(reflect.ValueOf(v.pop().IsNil()))
 		case opBr:
-			v1 := v.pop().(bool)
+			v1 := v.pop().Bool()
 			addr := v.readPtr()
 			if !v1 {
 				v.goTo(addr)
@@ -431,17 +435,17 @@ func (v *VM) Execute() (errRes error) {
 		case opPop:
 			v.pop()
 		case opExtCall:
-			fn := v.pop().(reflect.Value)
+			fn := v.pop()
 			nargs := v.readInt()
 			args := make([]reflect.Value, nargs)
 			for i := 0; i < nargs; i++ {
-				args[nargs-i-1] = reflect.ValueOf(v.pop())
+				args[nargs-i-1] = v.pop()
 			}
 			values := fn.Call(args)
-			v.push(values[0].Interface())
+			v.push(values[0])
 		case opClosureCall:
 			a := v.stackAddrArg()
-			cl := v.stack[a].(*closure)
+			cl := v.stack[a].Interface().(*closure)
 			nargs := v.readInt()
 			if nargs != cl.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
@@ -450,12 +454,14 @@ func (v *VM) Execute() (errRes error) {
 			for _, vv := range cl.values {
 				switch vv.vt {
 				case valTypeLocal:
-					p := vv.addr.abs(v.bp)
-					vv.value = &v.stack[p]
+					vv.value = v.stack[vv.addr.abs(v.bp)]
 				case valTypeClosure:
-					p := vv.addr.abs(v.bp)
-					sv := &v.stack[p]
-					vv.value = sv
+					stackValue := v.stack[vv.addr.abs(v.bp)]
+					ptr := reflect.New(stackValue.Type()).Elem()
+					ptr.Set(stackValue)
+					vv.value = ptr
+				default:
+					errorx.Panic(errorx.IllegalState.New("unexpected value type %d in closure", vv.vt))
 				}
 
 				vars = append(vars, vv)
@@ -463,158 +469,168 @@ func (v *VM) Execute() (errRes error) {
 			v.pushRestArgIfNeeded(nargs, cl)
 
 			addr := cl.addr
-			v.push(cl.nargs)
-			v.push(vars)
-			v.push(v.bp)
-			v.push(v.ip)
+			v.push(reflect.ValueOf(cl.nargs))
+			v.push(reflect.ValueOf(vars))
+			v.push(reflect.ValueOf(v.bp))
+			v.push(reflect.ValueOf(v.ip))
 			v.bp = v.sp - callFrameOffset
 			v.goTo(addr)
 		case opPopCall:
-			cl, ok := v.pop().(*closure)
+			clu := v.pop().Interface()
+			cl, ok := clu.(*closure)
 			if !ok {
-				errorx.Panic(errorx.IllegalState.New("can't cast"))
+				errorx.Panic(errorx.IllegalState.New("can't cast %T to closure", clu))
 			}
 			nargs := v.readInt()
 
 			if !cl.varargs && nargs != cl.nargs ||
 				cl.varargs && nargs < cl.nargs {
-				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
+				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function %s", cl.name))
 			}
 
 			v.pushRestArgIfNeeded(nargs, cl)
 			addr := cl.addr
-			v.push(cl.nargs)
-			v.push(cl.values)
-			v.push(v.bp)
-			v.push(v.ip)
+			v.push(reflect.ValueOf(cl.nargs))
+			v.push(reflect.ValueOf(cl.values))
+			v.push(reflect.ValueOf(v.bp))
+			v.push(reflect.ValueOf(v.ip))
 			v.bp = v.sp - callFrameOffset
 			v.goTo(addr)
 		case opCall:
 			addr := v.readPtr()
 			nargs := v.readInt()
-			v.push(nargs)
-			v.push(nil)
-			v.push(v.bp)
-			v.push(v.ip)
+			v.push(reflect.ValueOf(nargs))
+			v.push(reflect.ValueOf(nil))
+			v.push(reflect.ValueOf(v.bp))
+			v.push(reflect.ValueOf(v.ip))
 			v.bp = v.sp - callFrameOffset
 			v.goTo(addr)
 		case opRet:
 			result := v.pop()
 			v.sp = v.bp + callFrameOffset
-			v.ip = v.pop().(int)
-			v.bp = v.pop().(int)
+			v.ip = int(v.pop().Int())
+			v.bp = int(v.pop().Int())
 			v.pop() // skip closure values
-			nargs := v.pop().(int)
-			v.sp -= nargs
+			nargs := v.pop().Int()
+			v.sp -= int(nargs)
 			v.push(result)
 		case opJmp:
 			v.goTo(v.readPtr())
 		case opNot:
-			v.push(!v.pop().(bool))
+			v.push(reflect.ValueOf(!v.pop().Bool()))
 		case opCons:
 			first := v.pop()
 			second := v.pop()
-			v.push(&cons{
-				first:  first,
-				second: second,
-			})
-		case opCar:
-			c := v.pop().(*cons)
-			v.push(c.first)
 
+			var res *cons
+			if second.IsValid() {
+				res = second.Interface().(*cons)
+				res.concat(first.Interface())
+			} else {
+				res = &cons{
+					expr: []any{first.Interface()},
+				}
+			}
+
+			v.push(reflect.ValueOf(res))
+		case opCar:
+			c := (*cons)(v.pop().UnsafePointer())
+			if c.first() == nil {
+				v.push(reflect.ValueOf(nil))
+			} else {
+				v.push(reflect.ValueOf(c.first()))
+			}
 		case opCdr:
-			c := v.pop().(*cons)
-			v.push(c.second)
+			c := v.pop().Interface().(*cons)
+			v.push(reflect.ValueOf(c.tail()))
 		case opPrint:
 			c := v.pop()
 			fmt.Printf("%v\n", c)
 		case opSplice:
-			c := v.pop().(*cons)
-			prev := v.pop()
+			c := v.pop().Interface().(*cons)
+			prev := v.pop().Interface().(*cons)
 
-			l := consToList(c)
-			for i := 0; i < len(l); i++ {
-				prev = &cons{
-					first:  l[len(l)-1-i],
-					second: prev,
-				}
-			}
-			v.push(prev)
+			b := &cons{}
+			b.expr = append(prev.expr, c.expr...)
+
+			v.push(reflect.ValueOf(b))
 		case opMakeHashTable:
-			v.push(make(map[any]any))
+			v.push(reflect.ValueOf(make(map[any]any)))
 		case opSetHashTableValue:
-			m := v.pop().(map[any]any)
+			m := v.pop().Interface().(map[any]any)
 			k := v.pop()
 			v := v.pop()
-			m[k] = v
+			m[k] = v.Interface()
 		case opGetHashTableValue:
-			m := v.pop().(map[any]any)
+			m := v.pop().Interface().(map[any]any)
 			i := v.pop()
-			v.push(m[i])
+			v.push(reflect.ValueOf(m[i]))
 		case opMakeVector:
-			v.push(make([]any, 0))
+			v.push(reflect.ValueOf(make([]any, 0)))
 		case opSetVectorValue:
-			m := v.pop().([]any)
-			i := v.pop().(int64)
+			m := v.pop().Interface().([]any)
+			i := v.pop().Int()
 			v := v.pop()
 			m[i] = v
 		case opGetVectorValue:
 			vec := v.pop()
-			i := v.pop().(int64)
-			var pv any
-			switch vect := vec.(type) {
-			case string:
-				pv = string([]rune(vect)[i])
-			case []any:
-				pv = vect[i]
+			i := v.pop().Int()
+			var pv reflect.Value
+			switch vec.Kind() {
+			case reflect.String:
+				pv = reflect.ValueOf(string([]rune(vec.String())[i]))
+			case reflect.Array, reflect.Slice:
+				pv = vec.Index(int(i))
 			default:
-				errorx.Panic(errorx.IllegalArgument.New("unexpected type %T for GETV operation", vect))
+				panic(errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for GETV operation", vec.Type())))
 			}
 			v.push(pv)
 		case opAppend:
 			m := v.pop()
 			n := v.pop()
 
-			switch vv := m.(type) {
-			case []any:
-				vv = append(vv, n)
-				m = vv
-			case *cons:
-				lastCons(vv).second = &cons{first: n}
+			switch m.Kind() {
+			case reflect.Slice:
+				m = reflect.Append(m, n)
+			default:
+				vv := (*cons)(m.UnsafePointer())
+				vv.expr = append([]any{n}, vv.expr...)
 			}
 			v.push(m)
 		case opLen:
 			var l int
-			switch tv := v.pop().(type) {
-			case []any:
-				l = len(tv)
-			case map[any]any:
-				l = len(tv)
-			case string:
-				l = len(tv)
-			case *cons:
-				l = len(consToList(tv))
+			vv := v.pop()
+			switch vv.Kind() {
+			case reflect.Slice, reflect.Map, reflect.String:
+				l = vv.Len()
 			default:
-				panic(errorx.Panic(errorx.IllegalArgument.New("can't get length from type %T", tv)))
+				if vv.Type() == reflect.TypeOf(&cons{}) {
+					l = len(consToList((*cons)(vv.UnsafePointer())))
+				} else {
+					panic(errorx.Panic(errorx.IllegalArgument.New("can't get length from type %+v", vv.Type())))
+
+				}
 			}
-			v.push(l)
+			v.push(reflect.ValueOf(l))
 		case opContains:
 			container := v.pop()
 			m := v.pop()
 
 			var res bool
-			switch c := container.(type) {
-			case map[any]any:
-				_, res = c[m]
-			case []any:
-				for _, e := range c {
-					if e == m {
+			switch container.Kind() {
+			case reflect.Map:
+				res = !container.MapIndex(m).IsValid()
+			case reflect.Slice:
+				for i := 0; i < container.Len(); i++ {
+					if container.Index(i).Equal(m) {
 						res = true
 						break
 					}
 				}
+			default:
+				panic(errorx.Panic(errorx.IllegalArgument.New("can't check contains in type %+v", container.Type())))
 			}
-			v.push(res)
+			v.push(reflect.ValueOf(res))
 		case opNoOp:
 		case opHalt:
 			return
@@ -628,16 +644,12 @@ func (v *VM) pushRestArgIfNeeded(nargs int, cl *closure) {
 	if !cl.varargs {
 		return
 	}
-	var prev any
-	prev = nil
+	var expr []any
 	for i := 0; i < nargs-cl.nargs+1; i++ {
-		c := &cons{}
-		c.second = prev
-		c.first = v.pop()
-		prev = c
+		expr = append(expr, v.pop())
 	}
-	v.push(prev)
 
+	v.push(reflect.ValueOf(&cons{expr: expr}))
 }
 
 func (v *VM) readPtr() ptr {
@@ -664,22 +676,22 @@ func (v *VM) closureAddr() ptr {
 }
 
 func (v *VM) closureVars() []closureVariable {
-	return v.stack[v.bp+2].([]closureVariable)
+	return v.stack[v.bp+2].Interface().([]closureVariable)
 }
 
-func (v *VM) elem(a any) any {
-	if e, ok := a.(*any); ok {
-		return *e
+func (v *VM) elem(a reflect.Value) reflect.Value {
+	if a.Kind() == reflect.Ptr {
+		return a.Elem()
 	} else {
 		return a
 	}
 }
 
-func (v *VM) store(t any, s any) {
-	if e, ok := t.(*any); ok {
-		*e = v.elem(s)
+func (v *VM) store(t reflect.Value, s reflect.Value) {
+	if t.Kind() == reflect.Ptr {
+		t.Elem().Set(v.elem(s))
 	} else {
-		t = v.elem(s)
+		t.Set(v.elem(s))
 	}
 }
 
@@ -701,8 +713,8 @@ func (v *VM) next() byte {
 	return a
 }
 
-func (v *VM) pop() any {
-	ret := v.elem(v.stack[v.sp])
+func (v *VM) pop() reflect.Value {
+	ret := v.stack[v.sp]
 	v.sp--
 	return ret
 }
@@ -717,7 +729,7 @@ func (v *VM) peek() any {
 	return v.stack[v.sp]
 }
 
-func (v *VM) push(b any) {
+func (v *VM) push(b reflect.Value) {
 	v.sp++
 	v.stack[v.sp] = b
 }
