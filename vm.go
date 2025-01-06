@@ -24,7 +24,7 @@ const (
 	opPushClosure
 	opPushField
 	opStore
-	opStoreIndirection
+	opStoreField
 	opPop
 	opCmp
 	opAdd
@@ -95,15 +95,15 @@ func NewVM(output *VMByteCode) *VM {
 		bp:   -1,
 		sp:   -1,
 	}
-	for i := range output.constList {
-		vm.stack[i] = output.constList[i]
+	for i := range output.globalsList {
+		vm.stack[i] = output.globalsList[i]
 	}
 	vm.ip = len(output.definedFunctions)
 	vm.ep = vm.ip
-	vm.bp = len(output.constList)
-	vm.sp = len(output.constList) - 1
+	vm.bp = len(output.globalsList)
+	vm.sp = len(output.globalsList) - 1
 	vm.cp = vm.sp
-	vm.env = output.consts
+	vm.env = output.globals
 
 	vm.labels = output.labels
 	vm.debugInfo = output.debugInfo
@@ -152,8 +152,8 @@ func (v *VM) CodeString() string {
 			b.WriteString(fmt.Sprintf("CLOSURECALL %s %s", v.strStackAddr(), v.strStackAddr()))
 		case opStore:
 			b.WriteString(fmt.Sprintf("STORE %s", v.strStackAddr()))
-		case opStoreIndirection:
-			b.WriteString(fmt.Sprintf("STORE_INDIRECTION %s", v.strStackAddr()))
+		case opStoreField:
+			b.WriteString(fmt.Sprintf("STORE_FIELD %s %s", v.strStackAddr(), v.strStackAddr()))
 		case opAdd:
 			b.WriteString(fmt.Sprintf("ADD"))
 		case opSub:
@@ -336,7 +336,7 @@ func (v *VM) Execute() (errRes error) {
 		case opPushField:
 			variableAddr := v.stackAddrArg()
 			fieldPathAddr := v.stackAddrArg()
-			vv := v.stack[variableAddr]
+			vv := v.elem(v.stack[variableAddr])
 			path := v.stack[fieldPathAddr].Interface().(string)
 			rv := vv
 			for _, p := range strings.Split(path, ".") {
@@ -347,6 +347,22 @@ func (v *VM) Execute() (errRes error) {
 			vv := v.pop()
 			a := v.stackAddrArg()
 			v.stack[a] = vv
+		case opStoreField:
+			vv := v.pop()
+
+			variableAddr := v.stackAddrArg()
+			fieldPathAddr := v.stackAddrArg()
+
+			path := v.stack[fieldPathAddr].Interface().(string)
+			rv := v.elem(v.stack[variableAddr])
+			if !rv.CanAddr() {
+				errorx.Panic(errorx.IllegalArgument.New("can't store field %s in non addressable structure", path))
+			}
+			for _, p := range strings.Split(path, ".") {
+				rv = rv.FieldByName(p)
+			}
+
+			rv.Set(vv)
 		case opCmp:
 			v2 := v.elem(v.pop())
 			v1 := v.elem(v.pop())
@@ -391,11 +407,8 @@ func (v *VM) Execute() (errRes error) {
 			v1 := v.elem(v.pop())
 			v2 := v.elem(v.pop())
 			switch v1.Kind() {
-			case reflect.Float64, reflect.Float32:
-				v.push(reflect.ValueOf(v2.Float() / v1.Float()))
-			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Int8:
-				v.push(reflect.ValueOf(v2.Int() / v1.Int()))
-
+			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Int8, reflect.Float64, reflect.Float32:
+				v.push(reflect.ValueOf(v2.Convert(floatType).Float() / v1.Convert(floatType).Float()))
 			default:
 				errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for DIV operation", v1.Type()))
 			}
@@ -541,14 +554,13 @@ func (v *VM) Execute() (errRes error) {
 				v.push(reflect.ValueOf(c.first()))
 			}
 		case opCdr:
-			c := v.pop().Interface().(*cons)
+			c := (*cons)(v.pop().UnsafePointer())
 			v.push(reflect.ValueOf(c.tail()))
 		case opPrint:
-			c := v.pop()
-			fmt.Printf("%v\n", c)
+			fmt.Printf("%v\n", v.pop())
 		case opSplice:
-			c := v.pop().Interface().(*cons)
-			prev := v.pop().Interface().(*cons)
+			c := (*cons)(v.pop().UnsafePointer())
+			prev := (*cons)(v.pop().UnsafePointer())
 
 			b := &cons{}
 			b.expr = append(prev.expr, c.expr...)
@@ -751,40 +763,6 @@ func cmp[T constraints.Ordered](v1, v2 T, chFl byte) bool {
 	return false
 }
 
-func castInt(v any) int64 {
-	switch vt := v.(type) {
-	case int64:
-		return vt
-	case int32:
-		return int64(vt)
-	case int16:
-		return int64(vt)
-	case int8:
-		return int64(vt)
-	case int:
-		return int64(vt)
-	default:
-		panic(errorx.Panic(errorx.IllegalArgument.New("can't cast %T to int", v)))
-	}
-}
-
-func castFloat(v any) float64 {
-	switch vt := v.(type) {
-	case int64:
-		return float64(vt)
-	case int:
-		return float64(vt)
-	case int32:
-		return float64(vt)
-	case int16:
-		return float64(vt)
-	case int8:
-		return float64(vt)
-	case float64:
-		return vt
-	case float32:
-		return float64(vt)
-	default:
-		panic(errorx.Panic(errorx.IllegalArgument.New("can't cast %T to int", v)))
-	}
-}
+var (
+	floatType = reflect.TypeOf(float64(0))
+)

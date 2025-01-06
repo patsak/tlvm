@@ -177,12 +177,12 @@ func (p ptr) abs(base int) ptr {
 }
 
 type closure struct {
-	name      string            // function name
-	addr      ptr               // function code pointer
-	constAddr ptr               // static function code pointer
-	nargs     int               // number of function arguments
-	varargs   bool              // variable arguments exists
-	values    []closureVariable // bound variables from external scope
+	name       string            // function name
+	addr       ptr               // function code pointer
+	globalAddr ptr               // static function code pointer
+	nargs      int               // number of function arguments
+	varargs    bool              // variable arguments exists
+	values     []closureVariable // bound variables from external scope
 }
 
 type closureVariable struct {

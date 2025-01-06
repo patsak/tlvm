@@ -353,12 +353,12 @@ func TestEnvVariables(t *testing.T) {
 		type input struct {
 			C int64
 		}
-		v := &input{C: 3}
-		vm := NewVM(compile(t, "(setq n.C 1)", EnvVariables("n")))
-		vm.Env("n", &input{C: 3})
-		fmt.Printf("%s", vm.CodeString())
+		v := input{C: 3}
+		vm := NewVM(compile(t, "(setq n.C (+ n.C 1))", EnvVariables("n")))
+		vm.Env("n", &v)
 		require.NoError(t, vm.Execute())
-		require.EqualValues(t, 1, v.C)
+		require.EqualValues(t, 4, vm.Result().(int64))
+		require.EqualValues(t, 4, v.C)
 	})
 
 	t.Run("NotExists", func(t *testing.T) {

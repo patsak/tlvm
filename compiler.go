@@ -14,8 +14,8 @@ import (
 )
 
 type VMByteCode struct {
-	consts               map[any]ptr         // pointers to constants
-	constList            []reflect.Value     // const stack content
+	globals              map[any]ptr         // pointers to constants
+	globalsList          []reflect.Value     // const stack content
 	labels               map[string]*closure // pointers to labels in code
 	scope                *scope              // current variables scope
 	macrosByName         map[string]macros
@@ -74,7 +74,7 @@ func ExtFunctions(funcs map[string]any) (CompileOption, error) {
 func EnvVariables(env ...string) CompileOption {
 	return func(bt *VMByteCode) {
 		for _, k := range env {
-			bt.constAddr(reflect.ValueOf(k))
+			bt.getOrCreateGlobalAddressFor(reflect.ValueOf(k))
 		}
 	}
 }
@@ -106,7 +106,7 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 	}
 
 	vmByteCode := VMByteCode{
-		consts:              map[any]ptr{},
+		globals:             map[any]ptr{},
 		labels:              map[string]*closure{},
 		debugInfo:           map[int]string{},
 		scope:               newScope(scopeTypeStackFrame, nil),
@@ -132,23 +132,23 @@ func Build(text string, options ...CompileOption) (*VM, error) {
 	return NewVM(compileResult), nil
 }
 
-func (c *VMByteCode) constAddr(v reflect.Value) ptr {
+func (c *VMByteCode) getOrCreateGlobalAddressFor(v reflect.Value) ptr {
 	var vv any = nil
 	if v.IsValid() && v.Kind() != reflect.Func {
 		vv = v.Interface()
 	}
-	_, ok := c.consts[vv]
+	_, ok := c.globals[vv]
 	if ok {
-		return c.consts[vv]
+		return c.globals[vv]
 	}
-	c.consts[vv] = ptr(len(c.consts))
-	c.constList = append(c.constList, v)
-	return c.consts[vv]
+	c.globals[vv] = ptr(len(c.globals))
+	c.globalsList = append(c.globalsList, v)
+	return c.globals[vv]
 }
 
-func (c *VMByteCode) findConstAddr(v any) (ptrAndType, bool) {
-	res, ok := c.consts[v]
-	return ptrAndType{res, valTypeConst}, ok
+func (c *VMByteCode) findGlobalAddr(v any) (ptrAndType, bool) {
+	res, ok := c.globals[v]
+	return ptrAndType{res, valTypeGlobal}, ok
 }
 
 func (c *VMByteCode) storeFunction(cv string, cl *closure) {
@@ -198,7 +198,7 @@ func (c *VMByteCode) writeBool(b bool) *VMByteCode {
 }
 
 func (c *VMByteCode) writeConstAddr(v any) *VMByteCode {
-	return c.writePointer(c.constAddr(reflect.ValueOf(v)))
+	return c.writePointer(c.getOrCreateGlobalAddressFor(reflect.ValueOf(v)))
 }
 
 var emptyAddr = []byte{0, 0}
@@ -452,7 +452,7 @@ func emitDefineFunction(cc *cons, cur *VMByteCode) {
 
 	cur.inNewScope(scopeTypeStackFrame, func() {
 		fn := emitFunction(l.headLiteralValue(), l.tail(), cur)
-		fn.constAddr = cur.constAddr(reflect.ValueOf(fn))
+		fn.globalAddr = cur.getOrCreateGlobalAddressFor(reflect.ValueOf(fn))
 		funcDefinitionLength := cur.pos() - startDefinitionAddress
 		cur.modify(endLambdaAddress, offsetAddress(int(funcDefinitionLength)))
 
@@ -570,7 +570,7 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 	args := consToList(cc)
 	if extFunc, ok := cur.externalFunctions[args.headLiteralValue()]; ok {
 		nargs := emitArgs(args.tail(), cur)
-		cur.writeOpCode(opPush).writePointer(cur.constAddr(extFunc))
+		cur.writeOpCode(opPush).writePointer(cur.getOrCreateGlobalAddressFor(extFunc))
 		cur.debug("call external function %s", args.headLiteralValue())
 		cur.writeOpCode(opExtCall).writeInt(nargs)
 		return
@@ -601,7 +601,7 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 		}
 
 		if isClosure {
-			cur.writeOpCode(opClosureCall).writePointer(fAddress.constAddr).writeInt(fAddress.nargs)
+			cur.writeOpCode(opClosureCall).writePointer(fAddress.globalAddr).writeInt(fAddress.nargs)
 		} else {
 			cur.writeOpCode(opCall).writePointer(fAddress.addr).writeInt(fAddress.nargs)
 		}
@@ -649,26 +649,38 @@ func emitSetq(cc *cons, cur *VMByteCode) {
 	variableName := l.headLiteralValue()
 	rightValue := l[1]
 	emit(rightValue, cur)
+	parts := strings.Split(variableName, ".")
+	vname := parts[0]
 
-	addr, ok := cur.scope.resolveAddress(variableName)
+	addr, ok := cur.scope.resolveAddress(vname)
 	if !ok {
-		addr = cur.scope.createNextAddr(variableName, valTypeLocal)
+		addr, ok = cur.findGlobalAddr(vname)
+	}
+	if !ok {
+		addr = cur.scope.createNextAddr(vname, valTypeLocal)
 	}
 
 	switch addr.tp {
 	case valTypeClosure:
 		cur.writeOpCode(opStoreClosureVal).writePointer(addr.ptr)
 		cur.writeOpCode(opPushClosureVal).writePointer(addr.ptr)
-	case valTypeLocal:
-		cur.writeOpCode(opStore).writePointer(addr.ptr)
-		cur.writeOpCode(opPush).writePointer(addr.ptr)
+	case valTypeLocal, valTypeGlobal:
+		parts := strings.Split(l.headLiteralValue(), ".")
+		if len(parts) == 1 {
+			cur.writeOpCode(opStore).writePointer(addr.ptr)
+			cur.writeOpCode(opPush).writePointer(addr.ptr)
+		} else {
+			fieldPath := strings.Join(parts[1:], ".")
+			cur.writeOpCode(opStoreField).writePointer(addr.ptr).writeConstAddr(fieldPath)
+			cur.writeOpCode(opPushField).writePointer(addr.ptr).writeConstAddr(fieldPath)
+		}
 	default:
-		errorx.Panic(errorx.IllegalArgument.New("unknown value type %d", valTypeLocal))
+		errorx.Panic(errorx.IllegalArgument.New("unknown value type %d", addr.tp))
 	}
 }
 
 func emitList(l SExpressions, cur *VMByteCode) {
-	cur.writeOpCode(opPush).writePointer(cur.constAddr(reflect.Value{}))
+	cur.writeOpCode(opPush).writePointer(cur.getOrCreateGlobalAddressFor(reflect.Value{}))
 
 	for i := len(l) - 1; i >= 1; i-- {
 		emit(l[i], cur)
@@ -821,7 +833,7 @@ func emitBacktick(v any, cur *VMByteCode) {
 	switch vv := v.(type) {
 	case *cons:
 		l := consToList(vv)
-		cur.writeOpCode(opPush).writePointer(cur.constAddr(reflect.Value{}))
+		cur.writeOpCode(opPush).writePointer(cur.getOrCreateGlobalAddressFor(reflect.Value{}))
 		for i := 0; i < len(l); i++ {
 			v := l[len(l)-1-i]
 			if com, ok := matchMacroSpecialSymbol(v, keywordComma); ok {
@@ -952,11 +964,11 @@ func emitAppend(args SExpressions, cur *VMByteCode) {
 	cur.writeOpCode(opAppend)
 }
 
-func emitLiteral(v literal, cur *VMByteCode) {
+func emitLiteral(v literal, cur *VMByteCode) ptrAndType {
 	parts := variableParts(v.value)
 	addr, ok := cur.scope.resolveAddress(parts[0])
 	if !ok {
-		addr, ok = cur.findConstAddr(parts[0])
+		addr, ok = cur.findGlobalAddr(parts[0])
 		if !ok {
 			errorx.Panic(errorx.IllegalArgument.New("unknown literal '%s'", v.value))
 		}
@@ -964,7 +976,7 @@ func emitLiteral(v literal, cur *VMByteCode) {
 	switch addr.tp {
 	case valTypeClosure:
 		cur.writeOpCode(opPushClosureVal).writePointer(addr.ptr)
-	case valTypeLocal, valTypeConst:
+	case valTypeLocal, valTypeGlobal:
 		if len(parts) == 1 {
 			cur.writeOpCode(opPush).writePointer(addr.ptr)
 		} else {
@@ -973,12 +985,13 @@ func emitLiteral(v literal, cur *VMByteCode) {
 	default:
 		errorx.Panic(errorx.IllegalArgument.New("unknown value type '%d'", addr.tp))
 	}
+	return addr
 }
 
 type valType int
 
 const (
-	valTypeConst valType = iota
+	valTypeGlobal valType = iota
 	valTypeClosure
 	valTypeLocal
 )

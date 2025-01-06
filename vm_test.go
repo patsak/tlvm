@@ -1,7 +1,6 @@
 package tlvm
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,21 +34,20 @@ func BenchmarkVM(b *testing.B) {
 	})
 
 	b.Run("BaseExprVM", func(b *testing.B) {
-		codeConcat := `
+		code := `
 (and 
 	(or (eq Origin "MOW") (eq Country "RU")) 
 	(or (eq Adults 1) (gte Value 100))
 )
 `
-		bin, err := Compile(codeConcat, EnvVariables("Origin", "Country", "Value", "Adults"))
+		bin, err := Compile(code, EnvVariables("Origin", "Country", "Value", "Adults"))
 		require.NoError(b, err)
 
 		vm := NewVM(bin)
-		vm.Env("Origin", "MOW")
-		vm.Env("Country", "RU")
+		vm.EnvString("Origin", "MOW")
+		vm.EnvString("Country", "RU")
 		vm.EnvInt("Value", 100)
 		vm.EnvInt("Adults", 1)
-		fmt.Print(vm.CodeString())
 		require.NoError(b, vm.Execute())
 		require.EqualValues(b, true, vm.Result())
 		b.ReportAllocs()
