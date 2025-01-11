@@ -291,8 +291,7 @@ func (v *VM) Execute() (errRes error) {
 		v.ip++
 		switch opCode(o) {
 		case opPush:
-			a := v.readBasePointerAddr()
-			vv := v.stack[a]
+			vv := v.getStackValueByAddress(v.readBasePointerAddr())
 			v.push(vv)
 		case opPushClosureVal:
 			a := v.readClosureAddr()
@@ -321,10 +320,10 @@ func (v *VM) Execute() (errRes error) {
 					closureVar.value = clVars[varPtr.abs(0)].value
 				case valTypeLocal:
 					// replace stack value with pointer
-					stackValue := v.stack[varPtr.abs(v.bp)]      // copy local value
-					ptr := reflect.New(stackValue.Type()).Elem() // create pointer
+					stackValue := v.getStackValueByAddress(varPtr.abs(v.bp)) // copy local value
+					ptr := reflect.New(stackValue.Type()).Elem()             // create pointer
 					ptr.Set(stackValue)
-					v.stack[varPtr.abs(v.bp)] = ptr
+					v.setStackValueByAddress(varPtr.abs(v.bp), ptr)
 					closureVar.value = ptr
 				default:
 					errorx.Panic(errorx.IllegalState.New("unexpected value type %d in closure", vt))
@@ -336,9 +335,9 @@ func (v *VM) Execute() (errRes error) {
 		case opPushField:
 			variableAddr := v.readBasePointerAddr()
 			fieldPathAddr := v.readBasePointerAddr()
-			vv := v.elem(v.stack[variableAddr])
-			path := v.stack[fieldPathAddr].Interface().(string)
-			rv := vv
+			structValue := v.elem(v.getStackValueByAddress(variableAddr))
+			path := v.getStackValueByAddress(fieldPathAddr).Interface().(string)
+			rv := structValue
 			for _, p := range strings.Split(path, ".") {
 				rv = rv.FieldByName(p)
 			}
@@ -353,8 +352,8 @@ func (v *VM) Execute() (errRes error) {
 			variableAddr := v.readBasePointerAddr()
 			fieldPathAddr := v.readBasePointerAddr()
 
-			path := v.stack[fieldPathAddr].Interface().(string)
-			rv := v.elem(v.stack[variableAddr])
+			path := v.getStackValueByAddress(fieldPathAddr).Interface().(string)
+			rv := v.elem(v.getStackValueByAddress(variableAddr))
 			if !rv.CanAddr() {
 				errorx.Panic(errorx.IllegalArgument.New("can't store field %s in non addressable structure", path))
 			}
@@ -458,7 +457,7 @@ func (v *VM) Execute() (errRes error) {
 			v.push(values[0])
 		case opClosureCall:
 			a := v.readBasePointerAddr()
-			cl := v.stack[a].Interface().(*closure)
+			cl := v.getStackValueByAddress(a).Interface().(*closure)
 			nargs := v.readInt()
 			if nargs != cl.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
@@ -467,9 +466,9 @@ func (v *VM) Execute() (errRes error) {
 			for _, vv := range cl.values {
 				switch vv.vt {
 				case valTypeLocal:
-					vv.value = v.stack[vv.addr.abs(v.bp)]
+					vv.value = v.getStackValueByAddress(vv.addr.abs(v.bp))
 				case valTypeClosure:
-					stackValue := v.stack[vv.addr.abs(v.bp)]
+					stackValue := v.getStackValueByAddress(vv.addr.abs(v.bp))
 					ptr := reflect.New(stackValue.Type()).Elem()
 					ptr.Set(stackValue)
 					vv.value = ptr
@@ -689,6 +688,14 @@ func (v *VM) readClosureAddr() ptr {
 func (v *VM) getClosureVars() []closureVariable {
 	const closureVarsOffset = 2
 	return v.stack[v.bp+closureVarsOffset].Interface().([]closureVariable)
+}
+
+func (v *VM) getStackValueByAddress(p ptr) reflect.Value {
+	return v.stack[p]
+}
+
+func (v *VM) setStackValueByAddress(p ptr, rv reflect.Value) {
+	v.stack[p] = rv
 }
 
 func (v *VM) elem(a reflect.Value) reflect.Value {
