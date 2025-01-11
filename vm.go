@@ -169,11 +169,11 @@ func (v *VM) CodeString() string {
 		case opDiv:
 			b.WriteString(fmt.Sprintf("DIV"))
 		case opCall:
-			b.WriteString(fmt.Sprintf("CALL %d %d", v.stackAddrArg(), v.stackAddrArg()))
+			b.WriteString(fmt.Sprintf("CALL %d %d", v.readBasePointerAddr(), v.readBasePointerAddr()))
 		case opPopCall:
 			b.WriteString(fmt.Sprintf("POPCALL %s", v.strIpAddr()))
 		case opExtCall:
-			b.WriteString(fmt.Sprintf("EXTCALL %d", v.stackAddrArg()))
+			b.WriteString(fmt.Sprintf("EXTCALL %d", v.readBasePointerAddr()))
 		case opRet:
 			b.WriteString(fmt.Sprintf("RET"))
 		case opJmp:
@@ -291,21 +291,20 @@ func (v *VM) Execute() (errRes error) {
 		v.ip++
 		switch opCode(o) {
 		case opPush:
-			a := v.stackAddrArg()
+			a := v.readBasePointerAddr()
 			vv := v.stack[a]
 			v.push(vv)
 		case opPushClosureVal:
-			a := v.closureAddr()
-			vars := v.closureVars()
+			a := v.readClosureAddr()
+			vars := v.getClosureVars()
 			closureVar := vars[a]
 			v.push(closureVar.value)
 		case opStoreClosureVal:
 			r := v.pop()
-			a := v.closureAddr()
-			vars := v.closureVars()
+			a := v.readClosureAddr()
+			vars := v.getClosureVars()
 			vptr := vars[a]
 			v.store(vptr.value, r)
-
 		case opPushClosure:
 			ip := v.ipAddrArg()
 			n := v.readInt()
@@ -315,27 +314,28 @@ func (v *VM) Execute() (errRes error) {
 			for i := 0; i < nClosureVars; i++ {
 				vt := valType(v.next())
 				varPtr := v.readPtr()
-				vv := closureVariable{addr: varPtr, vt: vt}
+				closureVar := closureVariable{addr: varPtr, vt: vt}
 				switch vt {
 				case valTypeClosure:
-					clVars := v.closureVars()
-					vv.value = clVars[varPtr.abs(0)].value
+					clVars := v.getClosureVars()
+					closureVar.value = clVars[varPtr.abs(0)].value
 				case valTypeLocal:
-					nvv := v.stack[varPtr.abs(v.bp)] // copy local value
-					ptr := reflect.New(nvv.Type()).Elem()
-					ptr.Set(nvv)
+					// replace stack value with pointer
+					stackValue := v.stack[varPtr.abs(v.bp)]      // copy local value
+					ptr := reflect.New(stackValue.Type()).Elem() // create pointer
+					ptr.Set(stackValue)
 					v.stack[varPtr.abs(v.bp)] = ptr
-					vv.value = ptr
+					closureVar.value = ptr
 				default:
 					errorx.Panic(errorx.IllegalState.New("unexpected value type %d in closure", vt))
 				}
-				closureVars = append(closureVars, vv)
+				closureVars = append(closureVars, closureVar)
 			}
 
 			v.push(reflect.ValueOf(&closure{addr: ip, nargs: n, varargs: rest, values: closureVars}))
 		case opPushField:
-			variableAddr := v.stackAddrArg()
-			fieldPathAddr := v.stackAddrArg()
+			variableAddr := v.readBasePointerAddr()
+			fieldPathAddr := v.readBasePointerAddr()
 			vv := v.elem(v.stack[variableAddr])
 			path := v.stack[fieldPathAddr].Interface().(string)
 			rv := vv
@@ -345,13 +345,13 @@ func (v *VM) Execute() (errRes error) {
 			v.push(rv)
 		case opStore:
 			vv := v.pop()
-			a := v.stackAddrArg()
+			a := v.readBasePointerAddr()
 			v.stack[a] = vv
 		case opStoreField:
 			vv := v.pop()
 
-			variableAddr := v.stackAddrArg()
-			fieldPathAddr := v.stackAddrArg()
+			variableAddr := v.readBasePointerAddr()
+			fieldPathAddr := v.readBasePointerAddr()
 
 			path := v.stack[fieldPathAddr].Interface().(string)
 			rv := v.elem(v.stack[variableAddr])
@@ -457,7 +457,7 @@ func (v *VM) Execute() (errRes error) {
 			values := fn.Call(args)
 			v.push(values[0])
 		case opClosureCall:
-			a := v.stackAddrArg()
+			a := v.readBasePointerAddr()
 			cl := v.stack[a].Interface().(*closure)
 			nargs := v.readInt()
 			if nargs != cl.nargs {
@@ -678,33 +678,25 @@ func (v *VM) readBool() bool {
 	return v.next() > 0
 }
 
-func (v *VM) stackAddrArg() ptr {
-	ptr := v.readPtr()
-	return ptr.abs(v.bp)
+func (v *VM) readBasePointerAddr() ptr {
+	return v.readPtr().abs(v.bp)
 }
 
-func (v *VM) closureAddr() ptr {
+func (v *VM) readClosureAddr() ptr {
 	return v.readPtr().abs(0)
 }
 
-func (v *VM) closureVars() []closureVariable {
-	return v.stack[v.bp+2].Interface().([]closureVariable)
+func (v *VM) getClosureVars() []closureVariable {
+	const closureVarsOffset = 2
+	return v.stack[v.bp+closureVarsOffset].Interface().([]closureVariable)
 }
 
 func (v *VM) elem(a reflect.Value) reflect.Value {
-	if a.Kind() == reflect.Ptr {
-		return a.Elem()
-	} else {
-		return a
-	}
+	return reflect.Indirect(a)
 }
 
 func (v *VM) store(t reflect.Value, s reflect.Value) {
-	if t.Kind() == reflect.Ptr {
-		t.Elem().Set(v.elem(s))
-	} else {
-		t.Set(v.elem(s))
-	}
+	v.elem(t).Set(v.elem(s))
 }
 
 func (v *VM) ipAddrArg() ptr {
@@ -741,9 +733,9 @@ func (v *VM) peek() any {
 	return v.stack[v.sp]
 }
 
-func (v *VM) push(b reflect.Value) {
+func (v *VM) push(rv reflect.Value) {
 	v.sp++
-	v.stack[v.sp] = b
+	v.stack[v.sp] = rv
 }
 
 func (v *VM) goTo(p ptr) {
