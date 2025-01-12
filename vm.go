@@ -331,7 +331,7 @@ func (v *VM) Execute() (errRes error) {
 				closureVars = append(closureVars, closureVar)
 			}
 
-			v.push(reflect.ValueOf(&closure{addr: ip, nargs: n, varargs: rest, values: closureVars}))
+			v.push(reflect.ValueOf(&closure{codePointer: ip, nargs: n, varargs: rest, values: closureVars}))
 		case opPushField:
 			variableAddr := v.readBasePointerAddr()
 			fieldPathAddr := v.readBasePointerAddr()
@@ -480,7 +480,7 @@ func (v *VM) Execute() (errRes error) {
 			}
 			v.pushRestArgIfNeeded(nargs, cl)
 
-			addr := cl.addr
+			addr := cl.codePointer
 			v.push(reflect.ValueOf(cl.nargs))
 			v.push(reflect.ValueOf(vars))
 			v.push(reflect.ValueOf(v.bp))
@@ -501,7 +501,7 @@ func (v *VM) Execute() (errRes error) {
 			}
 
 			v.pushRestArgIfNeeded(nargs, cl)
-			addr := cl.addr
+			addr := cl.codePointer
 			v.push(reflect.ValueOf(cl.nargs))
 			v.push(reflect.ValueOf(cl.values))
 			v.push(reflect.ValueOf(v.bp))

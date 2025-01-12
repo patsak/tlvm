@@ -452,7 +452,7 @@ func emitDefineFunction(cc *cons, cur *VMByteCode) {
 
 	cur.inNewScope(scopeTypeStackFrame, func() {
 		fn := emitFunction(l.headLiteralValue(), l.tail(), cur)
-		fn.globalAddr = cur.getOrCreateGlobalAddressFor(reflect.ValueOf(fn))
+		fn.globalAddress = cur.getOrCreateGlobalAddressFor(reflect.ValueOf(fn))
 		funcDefinitionLength := cur.pos() - startDefinitionAddress
 		cur.modify(endLambdaAddress, offsetAddress(int(funcDefinitionLength)))
 
@@ -489,8 +489,8 @@ func emitFunction(name string, expr SExpressions, cur *VMByteCode) *closure {
 
 	cur.debug("define function %s", name)
 	fn := closure{
-		name: name,
-		addr: cur.pos(),
+		name:        name,
+		codePointer: cur.pos(),
 	}
 	cur.storeFunction(name, &fn)
 
@@ -532,7 +532,7 @@ func emitContains(v SExpressions, cur *VMByteCode) {
 }
 
 func emitReturn(cl closure, cur *VMByteCode) {
-	labelAddr := cl.addr
+	labelAddr := cl.codePointer
 
 	const opCallOffset = 5
 
@@ -601,9 +601,9 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 		}
 
 		if isClosure {
-			cur.writeOpCode(opClosureCall).writePointer(fAddress.globalAddr).writeInt(fAddress.nargs)
+			cur.writeOpCode(opClosureCall).writePointer(fAddress.globalAddress).writeInt(fAddress.nargs)
 		} else {
-			cur.writeOpCode(opCall).writePointer(fAddress.addr).writeInt(fAddress.nargs)
+			cur.writeOpCode(opCall).writePointer(fAddress.codePointer).writeInt(fAddress.nargs)
 		}
 
 		return
@@ -875,7 +875,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 
 		cur.writeOpCode(opPushClosure).
 			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
-			writeInt(fn.nargs).   // lambda arguments count
+			writeInt(fn.nargs). // lambda arguments count
 			writeBool(fn.varargs) // rest args flag
 
 		type closureVar struct {
