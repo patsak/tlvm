@@ -439,9 +439,9 @@ func (v *VM) Execute() (errRes error) {
 		case opNil:
 			v.push(reflect.ValueOf(v.pop().IsNil()))
 		case opBr:
-			v1 := v.pop().Bool()
+			condition := v.pop().Bool()
 			addr := v.readPtr()
-			if !v1 {
+			if !condition {
 				v.goTo(addr)
 			}
 		case opPop:
@@ -547,22 +547,16 @@ func (v *VM) Execute() (errRes error) {
 			v.push(reflect.ValueOf(res))
 		case opCar:
 			c := (*cons)(v.pop().UnsafePointer())
-			if c.first() == nil {
-				v.push(reflect.ValueOf(nil))
-			} else {
-				v.push(reflect.ValueOf(c.first()))
-			}
+			v.push(reflect.ValueOf(c.first()))
 		case opCdr:
 			c := (*cons)(v.pop().UnsafePointer())
 			v.push(reflect.ValueOf(c.tail()))
-		case opPrint:
-			fmt.Printf("%v\n", v.pop())
 		case opSplice:
-			c := (*cons)(v.pop().UnsafePointer())
+			next := (*cons)(v.pop().UnsafePointer())
 			prev := (*cons)(v.pop().UnsafePointer())
 
 			b := &cons{}
-			b.expr = append(prev.expr, c.expr...)
+			b.expr = append(prev.expr, next.expr...)
 
 			v.push(reflect.ValueOf(b))
 		case opMakeHashTable:
@@ -585,7 +579,7 @@ func (v *VM) Execute() (errRes error) {
 			m[i] = v
 		case opGetVectorValue:
 			vec := v.pop()
-			i := v.pop().Int()
+			i := v.pop().Convert(intType).Int()
 			var pv reflect.Value
 			switch vec.Kind() {
 			case reflect.String:
@@ -616,24 +610,23 @@ func (v *VM) Execute() (errRes error) {
 				l = vv.Len()
 			default:
 				if vv.Type() == reflect.TypeOf(&cons{}) {
-					l = len(consToList((*cons)(vv.UnsafePointer())))
+					l = len((*cons)(vv.UnsafePointer()).expr)
 				} else {
 					panic(errorx.Panic(errorx.IllegalArgument.New("can't get length from type %+v", vv.Type())))
-
 				}
 			}
 			v.push(reflect.ValueOf(l))
 		case opContains:
 			container := v.pop()
-			m := v.pop()
+			value := v.pop()
 
 			var res bool
 			switch container.Kind() {
 			case reflect.Map:
-				res = !container.MapIndex(m).IsValid()
+				res = !container.MapIndex(value).IsValid()
 			case reflect.Slice:
 				for i := 0; i < container.Len(); i++ {
-					if container.Index(i).Equal(m) {
+					if container.Index(i).Equal(value) {
 						res = true
 						break
 					}
@@ -642,6 +635,8 @@ func (v *VM) Execute() (errRes error) {
 				panic(errorx.Panic(errorx.IllegalArgument.New("can't check contains in type %+v", container.Type())))
 			}
 			v.push(reflect.ValueOf(res))
+		case opPrint:
+			fmt.Printf("%v\n", v.pop())
 		case opNoOp:
 		case opHalt:
 			return
@@ -764,4 +759,5 @@ func cmp[T constraints.Ordered](v1, v2 T, chFl byte) bool {
 
 var (
 	floatType = reflect.TypeOf(float64(0))
+	intType   = reflect.TypeOf(0)
 )
