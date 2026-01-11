@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 
 	"github.com/joomcode/errorx"
@@ -17,12 +17,12 @@ func main() {
 	var code []byte
 	var err error
 	if inputFile == "-" {
-		code, err = ioutil.ReadAll(os.Stdin)
+		code, err = io.ReadAll(os.Stdin)
 		if err != nil {
 			panic(err)
 		}
 	} else {
-		code, err = ioutil.ReadFile(inputFile)
+		code, err = os.ReadFile(inputFile)
 		if err != nil {
 			panic(err)
 		}
