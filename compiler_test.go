@@ -547,18 +547,15 @@ c
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fmt.Printf(stdMacroses + tc.code)
 			vmCode, err := Compile(stdMacroses+tc.code, tc.options...)
 			require.NoError(t, err)
-
 			vm := NewVM(vmCode)
-			fmt.Printf("%s\n", vm.CodeString())
 			require.NoError(t, vm.Execute(), tc.code)
 			switch vm.Result().(type) {
 			case *cons:
-				require.EqualValues(t, tc.result, fmt.Sprintf("%s", vm.Result()))
+				require.EqualValues(t, tc.result, fmt.Sprintf("%s", vm.Result()), "unexpected result for code: \n%s", vm.CodeString())
 			default:
-				require.EqualValues(t, tc.result, vm.Result())
+				require.EqualValues(t, tc.result, vm.Result(), "unexpected result for code: \n%s", vm.CodeString())
 			}
 		})
 	}
