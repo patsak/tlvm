@@ -525,6 +525,7 @@ func compile(t *testing.T, text string, opts ...CompileOption) *VMByteCode {
 
 func run(t *testing.T, code *VMByteCode) string {
 	vm := NewVM(code)
+	fmt.Printf("%s\n", vm.CodeString())
 	require.NoError(t, vm.Execute())
 	return fmt.Sprintf("%v", vm.Result())
 }

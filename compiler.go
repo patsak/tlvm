@@ -731,7 +731,8 @@ func emitMacroExpand(c *cons, cur *VMByteCode) {
 	if err := vmToProduceArgument.Execute(); err != nil {
 		errorx.Panic(err)
 	}
-	fmt.Printf("code len=%d:\n%s", len(vmToProduceArgument.code), vmToProduceArgument.CodeString())
+
+	cur.debug("code for macro expand len=%d:\n%v", len(vmToProduceArgument.code), macrosCodeString(vmToProduceArgument))
 
 	res := vmToProduceArgument.Result().(*cons)
 
@@ -767,7 +768,7 @@ func expandMacros(expr *cons, cur *VMByteCode) any {
 	vm := NewVM(cur)
 	vm.ip = len(vm.code)
 	vm.code = append(vm.code, macros.code...)
-	fmt.Printf("code: %s", vm.CodeString())
+
 	for i := range args {
 		vm.push(reflect.ValueOf(args[i]))
 	}
@@ -776,6 +777,8 @@ func expandMacros(expr *cons, cur *VMByteCode) any {
 	if err := vm.Execute(); err != nil {
 		errorx.Panic(err)
 	}
+
+	cur.debug("code macros len=%d:\n%v", len(vm.code), macrosCodeString(vm))
 
 	return vm.Result()
 }
@@ -871,7 +874,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 
 		cur.writeOpCode(opPushClosure).
 			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
-			writeInt(fn.nargs). // lambda arguments count
+			writeInt(fn.nargs).   // lambda arguments count
 			writeBool(fn.varargs) // rest args flag
 
 		type closureVar struct {
@@ -1190,4 +1193,19 @@ func makeByteUint(addr ptr) btUint {
 
 func readPtr(addr []byte) ptr {
 	return ptr(binary.BigEndian.Uint16(addr))
+}
+
+func macrosCodeString(vm *VM) LazyString {
+	return LazyString(func() string {
+		orig := vm.CodeString()
+		splitted := strings.Split(orig, "\n")
+
+		out := make([]string, 0, len(splitted)+2)
+		out = append(out, "  ---- macros start ----")
+		for _, line := range splitted {
+			out = append(out, "  "+line)
+		}
+		out = append(out, "  --- macros end ---")
+		return strings.Join(out, "\n")
+	})
 }
