@@ -205,6 +205,15 @@ func TestCommonOperators(t *testing.T) {
 			result: true,
 		},
 		{
+			name: "containsHashTableMissing",
+			code: `
+(setq t (make-hash-table))
+(seth t "foo1" "bar1")
+(contains t "foo2")
+`,
+			result: false,
+		},
+		{
 			name: "vector",
 			code: stdMacroses + `
 (setq t (make-vector))
@@ -261,6 +270,17 @@ func TestCommonOperators(t *testing.T) {
 (inc 0)
 `,
 			result: 21,
+		},
+		{
+			name: "updateOriginalValueInClosure",
+			code: `
+(setq s 10)
+(defun inc () (setq s (+ s 1)))
+(inc)
+(inc)
+s
+`,
+			result: 12,
 		},
 		{
 			name: "globalVariableManyClosures",
@@ -480,6 +500,17 @@ func TestSmoke(t *testing.T) {
 	require.NoError(t, vm.Execute())
 
 	require.EqualValues(t, 46, vm.Result())
+}
+
+func TestReaderEdgeCases(t *testing.T) {
+	t.Run("CommentAtEOF", func(t *testing.T) {
+		_, err := Compile(`(+ 1 2) ; comment without trailing newline`)
+		require.NoError(t, err)
+	})
+	t.Run("UnterminatedString", func(t *testing.T) {
+		_, err := Compile(`"abc`)
+		require.Error(t, err)
+	})
 }
 
 func compileAndRun(t *testing.T, rawText string) string {

@@ -92,16 +92,23 @@ func tokenize(text string) ([]token, error) {
 			t = token{string(r), i}
 		case r == ';':
 			j := i + 1
-			for ; runes[j] != '\n' && j < len(runes); j++ {
+			for j < len(runes) && runes[j] != '\n' {
+				j++
 			}
 			t = token{string(runes[i:j]), i}
 			i = j - 1
 		case r == '"':
 			j := i + 1
-			for ; runes[j] != '"' && j < len(runes); j++ {
-				if runes[j] == '\\' && j+1 >= len(runes) {
-					j++
+			for j < len(runes) && runes[j] != '"' {
+				// Skip escaped character, including escaped quote.
+				if runes[j] == '\\' && j+1 < len(runes) {
+					j += 2
+					continue
 				}
+				j++
+			}
+			if j >= len(runes) {
+				return nil, errorx.IllegalArgument.New("unterminated string").WithProperty(errRawTextPositionProperty, i)
 			}
 			t = token{string(runes[i : j+1]), i}
 			i = j
@@ -203,13 +210,13 @@ func (r *tokenReader) read() (_ any, err error) {
 			if err != nil {
 				panic(err)
 			}
-			return str{s, r.pos}, nil
+			return str{s, tok.pos}, nil
 		case tok.value == "true" || tok.value == "false":
 			v, err := strconv.ParseBool(tok.value)
 			if err != nil {
 				panic(err)
 			}
-			return boolean{v, r.pos}, nil
+			return boolean{v, tok.pos}, nil
 		case unicode.IsDigit(rune(tok.value[0])) || ((tok.value[0] == '-' || tok.value[0] == '+') && len(tok.value) > 1):
 			n, err := strconv.ParseInt(tok.value, 10, 64)
 			if err != nil {

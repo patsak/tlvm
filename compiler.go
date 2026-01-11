@@ -467,7 +467,7 @@ func emitDefineFunction(cc *cons, cur *VMByteCode) {
 			if !ok {
 				errorx.Panic(errorx.IllegalState.New("closure variable must exists in local variables in parent scope"))
 			}
-			localAddresses = append(localAddresses, closureVar{parentFrameAddress.ptr, valTypeClosure, boundVar.ptr})
+			localAddresses = append(localAddresses, closureVar{parentFrameAddress.ptr, parentFrameAddress.tp, boundVar.ptr})
 		}
 
 		sort.Slice(localAddresses, func(i, j int) bool {
@@ -592,13 +592,8 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 		emitArgs(fargs.tail(), cur)
 
 		cur.debug("call function %s", functionName)
-		isClosure := false
-		for _, v := range fAddress.values {
-			if v.vt == valTypeClosure {
-				isClosure = true
-				break
-			}
-		}
+
+		isClosure := len(fAddress.values) > 0
 
 		if isClosure {
 			cur.writeOpCode(opClosureCall).writePointer(fAddress.globalAddress).writeInt(fAddress.nargs)
@@ -875,7 +870,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 
 		cur.writeOpCode(opPushClosure).
 			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
-			writeInt(fn.nargs). // lambda arguments count
+			writeInt(fn.nargs).   // lambda arguments count
 			writeBool(fn.varargs) // rest args flag
 
 		type closureVar struct {

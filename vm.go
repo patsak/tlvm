@@ -466,12 +466,23 @@ func (v *VM) Execute() (errRes error) {
 			for _, vv := range cl.values {
 				switch vv.vt {
 				case valTypeLocal:
-					vv.value = v.getStackValueByAddress(vv.addr.abs(v.bp))
+					// bind to a stack slot in the caller frame by reference:
+					absAddr := vv.addr.abs(v.bp)
+					stackValue := v.getStackValueByAddress(absAddr)
+					if !stackValue.IsValid() {
+						errorx.Panic(errorx.IllegalState.New("invalid stack value for closure binding"))
+					}
+					if !stackValue.CanSet() {
+						cell := reflect.New(stackValue.Type()).Elem()
+						cell.Set(stackValue)
+						v.setStackValueByAddress(absAddr, cell)
+						stackValue = cell
+					}
+					vv.value = stackValue
 				case valTypeClosure:
-					stackValue := v.getStackValueByAddress(vv.addr.abs(v.bp))
-					ptr := reflect.New(stackValue.Type()).Elem()
-					ptr.Set(stackValue)
-					vv.value = ptr
+					// Bind to a closure variable of the caller frame by reference (no copying).
+					clVars := v.getClosureVars()
+					vv.value = clVars[vv.addr.abs(0)].value
 				default:
 					errorx.Panic(errorx.IllegalState.New("unexpected value type %d in closure", vv.vt))
 				}
@@ -564,12 +575,17 @@ func (v *VM) Execute() (errRes error) {
 		case opSetHashTableValue:
 			m := v.pop().Interface().(map[any]any)
 			k := v.pop()
-			v := v.pop()
-			m[k] = v.Interface()
+			val := v.pop()
+			m[k.Interface()] = val.Interface()
 		case opGetHashTableValue:
 			m := v.pop().Interface().(map[any]any)
 			i := v.pop()
-			v.push(reflect.ValueOf(m[i]))
+			val, ok := m[i.Interface()]
+			if !ok {
+				v.push(reflect.Value{})
+			} else {
+				v.push(reflect.ValueOf(val))
+			}
 		case opMakeVector:
 			v.push(reflect.ValueOf(make([]any, 0)))
 		case opSetVectorValue:
@@ -623,7 +639,7 @@ func (v *VM) Execute() (errRes error) {
 			var res bool
 			switch container.Kind() {
 			case reflect.Map:
-				res = !container.MapIndex(value).IsValid()
+				res = container.MapIndex(value).IsValid()
 			case reflect.Slice:
 				for i := 0; i < container.Len(); i++ {
 					if container.Index(i).Equal(value) {
