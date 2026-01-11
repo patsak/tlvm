@@ -41,6 +41,7 @@ const (
 	opExtCall
 	opPopCall
 	opRet
+	opFrameReset
 	opHalt
 	opCons
 	opCar
@@ -176,6 +177,8 @@ func (v *VM) CodeString() string {
 			b.WriteString(fmt.Sprintf("EXTCALL %d", v.readBasePointerAddr()))
 		case opRet:
 			b.WriteString(fmt.Sprintf("RET"))
+	case opFrameReset:
+			b.WriteString(fmt.Sprintf("FRAME_RESET"))
 		case opJmp:
 			b.WriteString(fmt.Sprintf("JMP %s", v.strIpAddr()))
 		case opNot:
@@ -537,6 +540,8 @@ func (v *VM) Execute() (errRes error) {
 			nargs := v.pop().Int()
 			v.sp -= int(nargs)
 			v.push(result)
+		case opFrameReset:
+			v.sp = v.bp + callFrameOffset
 		case opJmp:
 			v.goTo(v.readPtr())
 		case opNot:

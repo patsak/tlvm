@@ -560,6 +560,7 @@ func emitReturn(cl closure, cur *VMByteCode) {
 	for i := 0; i < cl.nargs; i++ {
 		cur.writeOpCode(opStore).writePointer(offsetAddress(-i))
 	}
+	cur.writeOpCode(opFrameReset)
 	cur.writeOpCode(opJmp).writePointer(labelAddr)
 	cur.debug("end define function %s", cl.name)
 	cur.writeOpCode(opRet)
@@ -870,7 +871,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 
 		cur.writeOpCode(opPushClosure).
 			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
-			writeInt(fn.nargs).   // lambda arguments count
+			writeInt(fn.nargs). // lambda arguments count
 			writeBool(fn.varargs) // rest args flag
 
 		type closureVar struct {

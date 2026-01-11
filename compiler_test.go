@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -322,24 +321,25 @@ s
 	}
 }
 
-func TestTailCallOptimization(t *testing.T) {
+func TestTailCallOptimizationLargeN(t *testing.T) {
 	text := `
-(defun factTCO (n acc) 
-	(if (lt n 1) 
+(defun sumTCO (n acc)
+	(if (lt n 1)
 		acc
 		(progn
-			(setq acc (* n acc))
-			(factTCO (- n 1) acc))))
-(defun factNoTCO (n) 
-	(if (lt n 1) 
-		1
-		(* n (factNoTCO (- n 1)))))
- `
-	assert.Equal(t, fmt.Sprint(fact(50)), compileAndRun(t, text+`(factTCO 50 1)`))
-	assert.Equal(t, fmt.Sprint(fact(15)), compileAndRun(t, text+`(factTCO 15 1)`))
-	assert.Equal(t, fmt.Sprint(fact(15)), compileAndRun(t, text+`(factNoTCO 15)`))
+			(setq acc (+ acc n))
+			(sumTCO (- n 1) acc))))
+(defun sumNoTCO (n)
+	(if (lt n 1)
+		0
+		(+ n (sumNoTCO (- n 1)))))
+`
+	const n = 1000
+	expected := fmt.Sprint(int64(n*(n+1)) / 2)
 
-	vmCode := compile(t, text+`(factNoTCO 50)`)
+	require.Equal(t, expected, compileAndRun(t, text+fmt.Sprintf("(sumTCO %d 0)", n)))
+
+	vmCode := compile(t, text+fmt.Sprintf("(sumNoTCO %d)", n))
 	vm := NewVM(vmCode)
 	require.Error(t, vm.Execute())
 }
