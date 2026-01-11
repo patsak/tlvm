@@ -728,13 +728,17 @@ func emitMacroExpand(c *cons, cur *VMByteCode) {
 	emit(l[1], cur)
 
 	vmToProduceArgument := NewVM(cur)
+
+	cur.debug("code for macro expand len=%d:\n%v", len(vmToProduceArgument.code), macrosCodeString(vmToProduceArgument))
+
 	if err := vmToProduceArgument.Execute(); err != nil {
 		errorx.Panic(err)
 	}
 
-	cur.debug("code for macro expand len=%d:\n%v", len(vmToProduceArgument.code), macrosCodeString(vmToProduceArgument))
-
-	res := vmToProduceArgument.Result().(*cons)
+	res, ok := vmToProduceArgument.Result().(*cons)
+	if !ok {
+		errorx.Panic(errorx.IllegalArgument.New("macroexpand argument must produce cons, got %T", vmToProduceArgument.Result()))
+	}
 
 	expandedMacros := expandMacros(res, cur)
 
@@ -774,11 +778,12 @@ func expandMacros(expr *cons, cur *VMByteCode) any {
 	}
 
 	vm.bp = vm.sp // prepare base pointer
+
+	cur.debug("code macros len=%d:\n%v", len(vm.code), macrosCodeString(vm))
+
 	if err := vm.Execute(); err != nil {
 		errorx.Panic(err)
 	}
-
-	cur.debug("code macros len=%d:\n%v", len(vm.code), macrosCodeString(vm))
 
 	return vm.Result()
 }

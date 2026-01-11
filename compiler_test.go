@@ -14,6 +14,7 @@ func TestCommonOperators(t *testing.T) {
 		code    string
 		options []CompileOption
 		result  any
+		wantErr bool
 	}{
 		{
 			name:   "setq",
@@ -31,14 +32,84 @@ func TestCommonOperators(t *testing.T) {
 			result: 6,
 		},
 		{
+			name:   "sumManyArgs",
+			code:   "(+ 1 2 3 4 5)",
+			result: 15,
+		},
+		{
+			name:   "sumSingleArg",
+			code:   "(+ 5)",
+			result: 5,
+		},
+		{
+			name:   "sumFloats",
+			code:   "(+ 1.25 2.5)",
+			result: 3.75,
+		},
+		{
+			name:   "sumMixedIntFloat",
+			code:   "(+ 1 2.5)",
+			result: 3.5,
+		},
+		{
+			name:    "sumInvalidTypes",
+			code:    `(+ "a" 1)`,
+			wantErr: true,
+		},
+		{
 			name:   "div",
 			code:   "(/ 2.4 2)",
 			result: 1.2,
 		},
 		{
+			name:   "divIntsToFloat",
+			code:   "(/ 5 2)",
+			result: 2.5,
+		},
+		{
+			name:   "divMixedIntFloat",
+			code:   "(/ 5 2.0)",
+			result: 2.5,
+		},
+		{
+			name:    "divInvalidTypes",
+			code:    `(/ "a" 2)`,
+			wantErr: true,
+		},
+		{
 			name:   "sub",
 			code:   "(- 10 2)",
 			result: 8,
+		},
+		{
+			name:   "subFloats",
+			code:   "(- 10.5 2.25)",
+			result: 8.25,
+		},
+		{
+			name:   "subMixedIntFloat",
+			code:   "(- 10 2.5)",
+			result: 7.5,
+		},
+		{
+			name:    "subInvalidTypes",
+			code:    `(- "a" 2)`,
+			wantErr: true,
+		},
+		{
+			name:   "mulInts",
+			code:   "(* 3 7)",
+			result: 21,
+		},
+		{
+			name:   "mulFloats",
+			code:   "(* 2.5 4)",
+			result: 10.0,
+		},
+		{
+			name:    "mulInvalidTypes",
+			code:    `(* "a" 2)`,
+			wantErr: true,
 		},
 		{
 			name:   "dolist",
@@ -234,6 +305,29 @@ func TestCommonOperators(t *testing.T) {
 			result: true,
 		},
 		{
+			name: "containsVectorMapValue",
+			code: stdMacroses + `
+(setq t (make-vector))
+(setq h (make-hash-table))
+(seth h "foo" "bar")
+(appendvs t h)
+(contains t h)
+`,
+			result: true,
+		},
+		{
+			name: "containsVectorMapValueMissing",
+			code: stdMacroses + `
+(setq t (make-vector))
+(setq h1 (make-hash-table))
+(setq h2 (make-hash-table))
+(seth h1 "foo" "bar")
+(appendvs t h1)
+(contains t h2)
+`,
+			result: false,
+		},
+		{
 			name: "lenVector",
 			code: stdMacroses + `
 (setq t (make-vector))
@@ -308,7 +402,12 @@ s
 
 			vm := NewVM(vmCode)
 			fmt.Printf("%s\n", vm.CodeString())
-			require.NoError(t, vm.Execute(), tc.code)
+			err = vm.Execute()
+			if tc.wantErr {
+				require.Error(t, err, tc.code)
+				return
+			}
+			require.NoError(t, err, tc.code)
 			switch vv := vm.Result().(type) {
 			case cons, *cons:
 				require.EqualValues(t, tc.result, fmt.Sprintf("%s", vv))

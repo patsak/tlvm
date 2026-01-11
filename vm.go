@@ -177,7 +177,7 @@ func (v *VM) CodeString() string {
 			b.WriteString(fmt.Sprintf("EXTCALL %d", v.readBasePointerAddr()))
 		case opRet:
 			b.WriteString(fmt.Sprintf("RET"))
-	case opFrameReset:
+		case opFrameReset:
 			b.WriteString(fmt.Sprintf("FRAME_RESET"))
 		case opJmp:
 			b.WriteString(fmt.Sprintf("JMP %s", v.strIpAddr()))
@@ -383,47 +383,49 @@ func (v *VM) Execute() (errRes error) {
 		case opAdd:
 			v1 := v.elem(v.pop())
 			v2 := v.elem(v.pop())
-			switch v1.Kind() {
-			case reflect.Float64, reflect.Float32:
-				v.push(reflect.ValueOf(v1.Float() + v2.Float()))
-			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Int8:
-				v.push(reflect.ValueOf(v1.Int() + v2.Int()))
-			case reflect.String:
-				v.push(reflect.ValueOf(v2.String() + v1.String()))
-			default:
-				errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for ADD operation", v1.Type()))
+			if v1.Kind() == reflect.String || v2.Kind() == reflect.String {
+				if v1.Kind() == reflect.String && v2.Kind() == reflect.String {
+					v.push(reflect.ValueOf(v2.String() + v1.String()))
+					break
+				}
+				errorx.Panic(errorx.IllegalArgument.New("unexpected types %v and %v for ADD operation", v2.Type(), v1.Type()))
+			}
+			if !isNumberKind(v1.Kind()) || !isNumberKind(v2.Kind()) {
+				errorx.Panic(errorx.IllegalArgument.New("unexpected types %v and %v for ADD operation", v2.Type(), v1.Type()))
+			}
+			if isFloatKind(v1.Kind()) || isFloatKind(v2.Kind()) {
+				v.push(reflect.ValueOf(v2.Convert(floatType).Float() + v1.Convert(floatType).Float()))
+			} else {
+				v.push(reflect.ValueOf(v2.Int() + v1.Int()))
 			}
 		case opSub:
 			v1 := v.elem(v.pop())
 			v2 := v.elem(v.pop())
-			switch v1.Kind() {
-			case reflect.Float64, reflect.Float32:
-				v.push(reflect.ValueOf(v2.Float() - v1.Float()))
-			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Int8:
+			if !isNumberKind(v1.Kind()) || !isNumberKind(v2.Kind()) {
+				errorx.Panic(errorx.IllegalArgument.New("unexpected types %v and %v for SUB operation", v2.Type(), v1.Type()))
+			}
+			if isFloatKind(v1.Kind()) || isFloatKind(v2.Kind()) {
+				v.push(reflect.ValueOf(v2.Convert(floatType).Float() - v1.Convert(floatType).Float()))
+			} else {
 				v.push(reflect.ValueOf(v2.Int() - v1.Int()))
-
-			default:
-				errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for SUB operation", v1.Type()))
 			}
 		case opDiv:
 			v1 := v.elem(v.pop())
 			v2 := v.elem(v.pop())
-			switch v1.Kind() {
-			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Int8, reflect.Float64, reflect.Float32:
-				v.push(reflect.ValueOf(v2.Convert(floatType).Float() / v1.Convert(floatType).Float()))
-			default:
-				errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for DIV operation", v1.Type()))
+			if !isNumberKind(v1.Kind()) || !isNumberKind(v2.Kind()) {
+				errorx.Panic(errorx.IllegalArgument.New("unexpected types %v and %v for DIV operation", v2.Type(), v1.Type()))
 			}
+			v.push(reflect.ValueOf(v2.Convert(floatType).Float() / v1.Convert(floatType).Float()))
 		case opMul:
 			v1 := v.elem(v.pop())
 			v2 := v.elem(v.pop())
-			switch v2.Kind() {
-			case reflect.Int32, reflect.Int8, reflect.Int64, reflect.Int:
+			if !isNumberKind(v1.Kind()) || !isNumberKind(v2.Kind()) {
+				errorx.Panic(errorx.IllegalArgument.New("unexpected types %v and %v for MUL operation", v2.Type(), v1.Type()))
+			}
+			if isFloatKind(v1.Kind()) || isFloatKind(v2.Kind()) {
+				v.push(reflect.ValueOf(v2.Convert(floatType).Float() * v1.Convert(floatType).Float()))
+			} else {
 				v.push(reflect.ValueOf(v2.Int() * v1.Int()))
-			case reflect.Float64, reflect.Float32:
-				v.push(reflect.ValueOf(v2.Float() * v1.Float()))
-			default:
-				errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for MUL operation", v2.Type()))
 			}
 		case opCmpBool:
 			v1 := v.elem(v.pop()).Bool()
@@ -647,7 +649,7 @@ func (v *VM) Execute() (errRes error) {
 				res = container.MapIndex(value).IsValid()
 			case reflect.Slice:
 				for i := 0; i < container.Len(); i++ {
-					if container.Index(i).Equal(value) {
+					if reflect.DeepEqual(container.Index(i).Interface(), value.Interface()) {
 						res = true
 						break
 					}
@@ -782,3 +784,25 @@ var (
 	floatType = reflect.TypeOf(float64(0))
 	intType   = reflect.TypeOf(0)
 )
+
+func isIntKind(k reflect.Kind) bool {
+	switch k {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return true
+	default:
+		return false
+	}
+}
+
+func isFloatKind(k reflect.Kind) bool {
+	switch k {
+	case reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
+	}
+}
+
+func isNumberKind(k reflect.Kind) bool {
+	return isIntKind(k) || isFloatKind(k)
+}
