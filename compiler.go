@@ -92,7 +92,7 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 			return
 		}
 		var ok bool
-		err, ok = errRec.(error)
+		err, ok = errorx.ErrorFromPanic(errRec)
 		if !ok {
 			err = errorx.IllegalArgument.New("%v", errRec)
 			return
@@ -465,7 +465,7 @@ func emitDefineFunction(cc *cons, cur *VMByteCode) {
 		for _, boundVar := range cur.scope.getBoundVariables() {
 			parentFrameAddress, ok := cur.scope.parentScope.boundFrameAddress(boundVar.value)
 			if !ok {
-				errorx.Panic(errorx.IllegalState.New("closure variable must exists in local variables in parent scope"))
+				errorx.Panic(errorx.IllegalState.New("closure variable must exists in local variables in parent scope").WithProperty(errRawTextPositionProperty, cc.pos))
 			}
 			localAddresses = append(localAddresses, closureVar{parentFrameAddress.ptr, parentFrameAddress.tp, boundVar.ptr})
 		}
@@ -671,7 +671,7 @@ func emitSetq(cc *cons, cur *VMByteCode) {
 			cur.writeOpCode(opPushField).writePointer(addr.ptr).writeConstAddr(fieldPath)
 		}
 	default:
-		errorx.Panic(errorx.IllegalArgument.New("unknown value type %d", addr.tp))
+		errorx.Panic(errorx.IllegalArgument.New("unknown value type %d", addr.tp).WithProperty(errRawTextPositionProperty, cc.pos))
 	}
 }
 
@@ -737,7 +737,7 @@ func emitMacroExpand(c *cons, cur *VMByteCode) {
 
 	res, ok := vmToProduceArgument.Result().(*cons)
 	if !ok {
-		errorx.Panic(errorx.IllegalArgument.New("macroexpand argument must produce cons, got %T", vmToProduceArgument.Result()))
+		errorx.Panic(errorx.IllegalArgument.New("macroexpand argument must produce cons, got %T", vmToProduceArgument.Result()).WithProperty(errRawTextPositionProperty, c.pos))
 	}
 
 	expandedMacros := expandMacros(res, cur)
@@ -752,10 +752,10 @@ func expandMacros(expr *cons, cur *VMByteCode) any {
 	args := l.tail()
 	macros := cur.macrosByName[name]
 	if macros.rest && len(args) < macros.nargs {
-		errorx.Panic(errorx.IllegalArgument.New("number of arguments for macros %s must be greater than %d", name, macros.nargs))
+		errorx.Panic(errorx.IllegalArgument.New("number of arguments for macros %s must be greater than %d", name, macros.nargs).WithProperty(errRawTextPositionProperty, expr.pos))
 	}
 	if !macros.rest && len(args) != macros.nargs {
-		errorx.Panic(errorx.IllegalArgument.New("number of arguments for macros %s must be equal to %d", name, macros.nargs))
+		errorx.Panic(errorx.IllegalArgument.New("number of arguments for macros %s must be equal to %d", name, macros.nargs).WithProperty(errRawTextPositionProperty, expr.pos))
 	}
 
 	if macros.rest {
@@ -879,7 +879,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 
 		cur.writeOpCode(opPushClosure).
 			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
-			writeInt(fn.nargs).   // lambda arguments count
+			writeInt(fn.nargs). // lambda arguments count
 			writeBool(fn.varargs) // rest args flag
 
 		type closureVar struct {
@@ -974,7 +974,7 @@ func emitLiteral(v literal, cur *VMByteCode) ptrAndType {
 	if !ok {
 		addr, ok = cur.findGlobalAddr(parts[0])
 		if !ok {
-			errorx.Panic(errorx.IllegalArgument.New("unknown literal '%s'", v.value))
+			errorx.Panic(errorx.IllegalArgument.New("unknown literal '%s'", v.value).WithProperty(errRawTextPositionProperty, v.pos))
 		}
 	}
 	switch addr.tp {
@@ -1150,7 +1150,23 @@ func consToListN(c *cons, n int) SExpressions {
 }
 
 func wrapCompilationError(err error, rawText string) error {
-	pos, ok := errorx.ExtractProperty(err, errRawTextPositionProperty)
+	var (
+		ok  bool
+		pos any
+	)
+
+	for {
+		pos, ok = errorx.ExtractProperty(err, errRawTextPositionProperty)
+		if ok {
+			break
+		}
+		errx := errorx.Cast(err)
+		if errx == nil {
+			break
+		}
+		err = errx.Cause()
+	}
+
 	if !ok {
 		return err
 	}
