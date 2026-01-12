@@ -598,8 +598,7 @@ func (v *VM) Execute() (errRes error) {
 		case opSetVectorValue:
 			m := v.pop().Interface().([]any)
 			i := v.pop().Int()
-			v := v.pop()
-			m[i] = v
+			m[i] = v.pop().Interface()
 		case opGetVectorValue:
 			vec := v.pop()
 			i := v.pop().Convert(intType).Int()

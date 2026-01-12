@@ -284,7 +284,7 @@ func TestCommonOperators(t *testing.T) {
 			result: false,
 		},
 		{
-			name: "vector",
+			name: "vectorAppend",
 			code: stdMacroses + `
 (setq t (make-vector))
 (appendvs t "bar1")
@@ -294,6 +294,17 @@ func TestCommonOperators(t *testing.T) {
 (getv t 1)
 `,
 			result: "bar2",
+		},
+		{
+			name: "vectorUpdate",
+			code: stdMacroses + `
+(setq t (make-vector))
+(appendvs t "bar1")
+(appendvs t "bar2")
+(setv t 1 "bar3")
+(getv t 1)
+`,
+			result: "bar3",
 		},
 		{
 			name: "containsVector",
