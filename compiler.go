@@ -133,8 +133,15 @@ func Build(text string, options ...CompileOption) (*VM, error) {
 }
 
 func (c *VMByteCode) getOrCreateGlobalAddressFor(v reflect.Value) ptr {
-	var vv any = nil
-	if v.IsValid() && v.Kind() != reflect.Func {
+	var vv any
+	if !v.IsValid() {
+		// Invalid reflect.Value is used to represent nil.
+		vv = nil
+	} else if v.Kind() == reflect.Func {
+		// Functions must not collide with nil in the globals map key (see zero reflect.Value use for nil),
+		// so we key them by their code pointer.
+		vv = v.Pointer()
+	} else {
 		vv = v.Interface()
 	}
 	_, ok := c.globals[vv]

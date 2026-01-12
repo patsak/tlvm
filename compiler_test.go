@@ -2,6 +2,7 @@ package tlvm
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"testing"
 
@@ -52,6 +53,11 @@ func TestCommonOperators(t *testing.T) {
 			result: 3.5,
 		},
 		{
+			name:   "sumStrings",
+			code:   `(+ "a" "b" "c")`,
+			result: "abc",
+		},
+		{
 			name:    "sumInvalidTypes",
 			code:    `(+ "a" 1)`,
 			wantErr: true,
@@ -70,6 +76,11 @@ func TestCommonOperators(t *testing.T) {
 			name:   "divMixedIntFloat",
 			code:   "(/ 5 2.0)",
 			result: 2.5,
+		},
+		{
+			name:   "divByZeroReturnsInf",
+			code:   "(/ 1 0)",
+			result: math.Inf(1),
 		},
 		{
 			name:    "divInvalidTypes",
@@ -107,6 +118,11 @@ func TestCommonOperators(t *testing.T) {
 			result: 10.0,
 		},
 		{
+			name:   "mulNegative",
+			code:   "(* -3 7)",
+			result: -21,
+		},
+		{
 			name:    "mulInvalidTypes",
 			code:    `(* "a" 2)`,
 			wantErr: true,
@@ -132,6 +148,56 @@ func TestCommonOperators(t *testing.T) {
 			result: 1,
 		},
 		{
+			name:   "ifFalse",
+			code:   "(setq a 5) (if (gt a 10) 1 0)",
+			result: 0,
+		},
+		{
+			name:   "notTrue",
+			code:   "(not true)",
+			result: false,
+		},
+		{
+			name:   "notFalse",
+			code:   "(not false)",
+			result: true,
+		},
+		{
+			name:   "eqStringsTrue",
+			code:   `(eq "abc" "abc")`,
+			result: true,
+		},
+		{
+			name:   "eqStringsFalse",
+			code:   `(eq "abc" "abd")`,
+			result: false,
+		},
+		{
+			name:   "eqFloatsTrue",
+			code:   `(eq 1.25 1.25)`,
+			result: true,
+		},
+		{
+			name:   "ltStrings",
+			code:   `(lt "abc" "abd")`,
+			result: true,
+		},
+		{
+			name:   "gteEqual",
+			code:   `(gte 10 10)`,
+			result: true,
+		},
+		{
+			name:   "lteEqual",
+			code:   `(lte 10 10)`,
+			result: true,
+		},
+		{
+			name:    "cmpInvalidTypesBool",
+			code:    `(eq true false)`,
+			wantErr: true,
+		},
+		{
 			name:   "andTrue",
 			code:   "(and (gt 10 1) (gt 10 9))",
 			result: true,
@@ -150,6 +216,26 @@ func TestCommonOperators(t *testing.T) {
 			name:   "orFalse",
 			code:   "(or (gt 1 10) (gt 1 10) (gt 1 20))",
 			result: false,
+		},
+		{
+			name:   "andShortCircuit",
+			code:   `(setq x 0) (and false (setq x (+ "a" 1))) x`,
+			result: 0,
+		},
+		{
+			name:   "orShortCircuit",
+			code:   `(setq x 0) (or true (setq x (+ "a" 1))) x`,
+			result: 0,
+		},
+		{
+			name: "prognReturnsLast",
+			code: `
+(progn
+  (setq x 1)
+  (setq x (+ x 1))
+  x)
+`,
+			result: 2,
 		},
 		{
 			name:   "list",
@@ -355,6 +441,11 @@ func TestCommonOperators(t *testing.T) {
 			result: 4,
 		},
 		{
+			name:   "lenString",
+			code:   `(len "abcd")`,
+			result: 4,
+		},
+		{
 			name: "lenHashTable",
 			code: `
 (setq t (make-hash-table))
@@ -405,6 +496,24 @@ s
 (append (list 1 2 3) 4)
 `,
 			result: "(1 2 3 4)",
+		},
+		{
+			name:   "getvString",
+			code:   `(getv "abcd" 1)`,
+			result: "b",
+		},
+		{
+			name:   "getvStringUnicode",
+			code:   `(getv "аБв" 1)`,
+			result: "Б",
+		},
+		{
+			name: "setvOutOfRange",
+			code: stdMacroses + `
+(setq t (make-vector))
+(setv t 0 "x")
+`,
+			wantErr: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -573,40 +682,103 @@ c
 }
 
 func TestSmoke(t *testing.T) {
-	origText := `
-(defun fact (n) 
-	(setq next (- n 1))
-	(if (gt n 0) 
-		(* n (fact next)) 
-		(progn 
-			(+ 0 1)
-			1
-			)
+	isPrime := func(n int64) bool {
+		if n < 2 {
+			return false
+		}
+		for i := int64(2); i*i <= n; i++ {
+			if n%i == 0 {
+				return false
+			}
+		}
+		return true
+	}
+
+	code := stdMacroses + `
+; Meaningful computation: build a small "report" and compute a score.
+; Uses: macros (stdMacroses), vectors, loops, functions, lambdas, closures, hash-tables and external functions.
+
+; Custom macros using backtick and splice (,@).
+(defmacro initNums (v)
+	` + "`" + `(progn
+		(setq ,v (make-vector))
+		,@(list
+			` + "`" + `(appendvs ,v 1)
+			` + "`" + `(appendvs ,v 2)
+			` + "`" + `(appendvs ,v 3)
+			` + "`" + `(appendvs ,v 4)
+			` + "`" + `(appendvs ,v 5)
+			` + "`" + `(appendvs ,v 7)
+			` + "`" + `(appendvs ,v 9)
+		)
 	)
 )
 
-(defmacro spl (&rest a)
-     ` + "`(list ,@a 1 1)" + `
+(defmacro initTags (v)
+	` + "`" + `(progn
+		(setq ,v (make-vector))
+		,@(list
+			` + "`" + `(appendvs ,v "A12")
+			` + "`" + `(appendvs ,v "B07")
+			` + "`" + `(appendvs ,v "A99")
+			` + "`" + `(appendvs ,v "C00")
+		)
+	)
 )
 
-(defun increment (x) 
-	(setq ll (lambda (a c) (+ a (fact c))))
-	(setq k 15)
-	(setq q x)
+(setq nums 0)
+(setq tags 0)
 
-	(dolist (k (spl (+ 1 0) 1)) ; 3+7+15+31
-		(setq q (+ q (ll q k))))
-	(+ q k))
+(initNums nums)
+(initTags tags)
 
-(increment 1)
+; Closure returning a function (lambda) that captures k.
+(defun makeScaler (k)
+	(lambda (x)
+		(* x k)))
+
+; Closure with internal state.
+(defun makeRunningSum ()
+	(setq acc 0)
+	(lambda (x)
+		(setq acc (+ acc x))
+		acc))
+
+(setq scale2 (makeScaler 2))
+(setq addScore (makeRunningSum))
+
+; +2*n for each prime n
+(forRange i 0 (len nums)
+	(setq n (getv nums i))
+	(if (isPrime n)
+		(addScore (scale2 n))
+		0))
+
+; +10 for each tag that matches regex "^A"
+(forRange j 0 (len tags)
+	(if (match "^A" (getv tags j))
+		(addScore 10)
+		0))
+
+(setq report (make-hash-table))
+(seth report "numsCount" (len nums))
+(seth report "tagsCount" (len tags))
+(seth report "score" (addScore 0)) ; read score without changing it
+
+(geth report "score")
 `
 
-	res, err := Compile(origText)
+	vmCode, err := Compile(code, ExtFunctionsOrPanic(map[string]any{
+		"match": func(r, s string) bool {
+			return regexp.MustCompile(r).MatchString(s)
+		},
+		"isPrime": isPrime,
+	}))
 	require.NoError(t, err)
-	vm := NewVM(res)
-	require.NoError(t, vm.Execute())
 
-	require.EqualValues(t, 46, vm.Result())
+	vm := NewVM(vmCode)
+	require.NoError(t, vm.Execute())
+	require.EqualValues(t, 54, vm.Result())
 }
 
 func TestReaderEdgeCases(t *testing.T) {

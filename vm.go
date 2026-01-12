@@ -452,11 +452,11 @@ func (v *VM) Execute() (errRes error) {
 		case opPop:
 			v.pop()
 		case opExtCall:
-			fn := v.pop()
+			fn := v.elem(v.pop())
 			nargs := v.readInt()
 			args := make([]reflect.Value, nargs)
 			for i := 0; i < nargs; i++ {
-				args[nargs-i-1] = v.pop()
+				args[nargs-i-1] = v.elem(v.pop())
 			}
 			values := fn.Call(args)
 			v.push(values[0])
@@ -570,8 +570,20 @@ func (v *VM) Execute() (errRes error) {
 			c := (*cons)(v.pop().UnsafePointer())
 			v.push(reflect.ValueOf(c.tail()))
 		case opSplice:
-			next := (*cons)(v.pop().UnsafePointer())
-			prev := (*cons)(v.pop().UnsafePointer())
+			nextV := v.pop()
+			prevV := v.pop()
+
+			if !prevV.IsValid() {
+				v.push(nextV)
+				break
+			}
+			if !nextV.IsValid() {
+				v.push(prevV)
+				break
+			}
+
+			next := (*cons)(nextV.UnsafePointer())
+			prev := (*cons)(prevV.UnsafePointer())
 
 			b := &cons{}
 			b.expr = append(prev.expr, next.expr...)
@@ -716,7 +728,23 @@ func (v *VM) setStackValueByAddress(p ptr, rv reflect.Value) {
 }
 
 func (v *VM) elem(a reflect.Value) reflect.Value {
-	return reflect.Indirect(a)
+	for a.IsValid() {
+		switch a.Kind() {
+		case reflect.Interface:
+			if a.IsNil() {
+				return reflect.Value{}
+			}
+			a = a.Elem()
+		case reflect.Ptr:
+			if a.IsNil() {
+				return reflect.Value{}
+			}
+			a = a.Elem()
+		default:
+			return a
+		}
+	}
+	return a
 }
 
 func (v *VM) store(t reflect.Value, s reflect.Value) {
