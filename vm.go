@@ -1,7 +1,6 @@
 package tlvm
 
 import (
-	"encoding/binary"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -312,7 +311,7 @@ func (v *VM) Execute() (errRes error) {
 			n := v.readInt()
 			rest := v.readBool()
 			nClosureVars := v.readInt()
-			var closureVars []closureVariable
+			closureVars := make([]closureVariable, 0, nClosureVars)
 			for i := 0; i < nClosureVars; i++ {
 				vt := valType(v.next())
 				varPtr := v.readPtr()
@@ -340,10 +339,7 @@ func (v *VM) Execute() (errRes error) {
 			fieldPathAddr := v.readBasePointerAddr()
 			structValue := v.elem(v.getStackValueByAddress(variableAddr))
 			path := v.getStackValueByAddress(fieldPathAddr).Interface().(string)
-			rv := structValue
-			for _, p := range strings.Split(path, ".") {
-				rv = rv.FieldByName(p)
-			}
+			rv := v.fieldByPath(structValue, path)
 			v.push(rv)
 		case opStore:
 			vv := v.pop()
@@ -360,9 +356,7 @@ func (v *VM) Execute() (errRes error) {
 			if !rv.CanAddr() {
 				errorx.Panic(errorx.IllegalArgument.New("can't store field %s in non addressable structure", path))
 			}
-			for _, p := range strings.Split(path, ".") {
-				rv = rv.FieldByName(p)
-			}
+			rv = v.fieldByPath(rv, path)
 
 			rv.Set(vv)
 		case opCmp:
@@ -467,7 +461,7 @@ func (v *VM) Execute() (errRes error) {
 			if nargs != cl.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
 			}
-			var vars []closureVariable
+		vars := make([]closureVariable, 0, len(cl.values))
 			for _, vv := range cl.values {
 				switch vv.vt {
 				case valTypeLocal:
@@ -617,7 +611,7 @@ func (v *VM) Execute() (errRes error) {
 			var pv reflect.Value
 			switch vec.Kind() {
 			case reflect.String:
-				pv = reflect.ValueOf(string([]rune(vec.String())[i]))
+				pv = reflect.ValueOf(stringRuneAt(vec.String(), i))
 			case reflect.Array, reflect.Slice:
 				pv = vec.Index(int(i))
 			default:
@@ -643,7 +637,7 @@ func (v *VM) Execute() (errRes error) {
 			case reflect.Slice, reflect.Map, reflect.String:
 				l = vv.Len()
 			default:
-				if vv.Type() == reflect.TypeOf(&cons{}) {
+				if vv.Type() == consType {
 					l = len((*cons)(vv.UnsafePointer()).expr)
 				} else {
 					panic(errorx.Panic(errorx.IllegalArgument.New("can't get length from type %+v", vv.Type())))
@@ -684,7 +678,7 @@ func (v *VM) pushRestArgIfNeeded(nargs int, cl *closure) {
 	if !cl.varargs {
 		return
 	}
-	var expr []any
+	expr := make([]any, 0, nargs-cl.nargs+1)
 	for i := 0; i < nargs-cl.nargs+1; i++ {
 		expr = append(expr, v.pop())
 	}
@@ -693,9 +687,11 @@ func (v *VM) pushRestArgIfNeeded(nargs int, cl *closure) {
 }
 
 func (v *VM) readPtr() ptr {
-	res := binary.BigEndian.Uint16(v.code[v.ip : v.ip+2])
-	v.ip += 2
-	return ptr(res)
+	ip := v.ip
+	code := v.code
+	res := ptr(uint16(code[ip])<<8 | uint16(code[ip+1]))
+	v.ip = ip + 2
+	return res
 }
 
 func (v *VM) readInt() int {
@@ -725,6 +721,17 @@ func (v *VM) getStackValueByAddress(p ptr) reflect.Value {
 
 func (v *VM) setStackValueByAddress(p ptr, rv reflect.Value) {
 	v.stack[p] = rv
+}
+
+func (v *VM) fieldByPath(rv reflect.Value, path string) reflect.Value {
+	for {
+		part, rest, ok := strings.Cut(path, ".")
+		rv = rv.FieldByName(part)
+		if !ok {
+			return rv
+		}
+		path = rest
+	}
 }
 
 func (v *VM) elem(a reflect.Value) reflect.Value {
@@ -794,6 +801,19 @@ func (v *VM) goTo(p ptr) {
 	v.ip = int(p.abs(v.ip))
 }
 
+func stringRuneAt(s string, index int64) string {
+	if index < 0 {
+		panic("index out of range")
+	}
+	for _, r := range s {
+		if index == 0 {
+			return string(r)
+		}
+		index--
+	}
+	panic("index out of range")
+}
+
 func cmp[T constraints.Ordered](v1, v2 T, chFl byte) bool {
 	if chFl&cmpFlagEq > 0 {
 		return v1 == v2
@@ -810,6 +830,7 @@ func cmp[T constraints.Ordered](v1, v2 T, chFl byte) bool {
 var (
 	floatType = reflect.TypeOf(float64(0))
 	intType   = reflect.TypeOf(0)
+	consType  = reflect.TypeOf(&cons{})
 )
 
 func isIntKind(k reflect.Kind) bool {
