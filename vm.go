@@ -74,7 +74,7 @@ const (
 )
 
 type VM struct {
-	stack                       [256]reflect.Value
+	stack                       [256]stackValue
 	code                        []byte         // byte code
 	cp                          int            // constants top pointer
 	ep                          int            // entry point
@@ -84,7 +84,13 @@ type VM struct {
 	env                         map[any]ptr    // environment variables pointers
 	debugInfo                   map[int]string // debug string by instruction position
 	originalTextPositionPointer map[int]int    // position in original code text by instruction position
-	labels                      map[string]*closure
+	labels                      map[Label]*closure
+}
+
+type Label string
+
+func (l Label) String() string {
+	return string(l)
 }
 
 const callFrameOffset = 4
@@ -235,31 +241,31 @@ func (v *VM) Copy() VM {
 }
 
 func (vm *VM) EnvInt(k string, v int) {
-	vm.Env(k, int64(v))
+	vm.Env(Label(k), int64(v))
 }
 
 func (vm *VM) EnvInt64(k string, v int64) {
-	vm.Env(k, v)
+	vm.Env(Label(k), v)
 }
 
 func (vm *VM) EnvFloat32(k string, v float32) {
-	vm.Env(k, float64(v))
+	vm.Env(Label(k), float64(v))
 }
 
 func (vm *VM) EnvFloat64(k string, v float64) {
-	vm.Env(k, v)
+	vm.Env(Label(k), v)
 }
 
-func (vm *VM) Env(k any, v any) {
+func (vm *VM) Env(k Label, v any) {
 	pos, ok := vm.env[k]
 	if !ok {
 		return
 	}
-	vm.stack[pos] = reflect.ValueOf(v)
+	vm.stack[pos] = stackValueFrom(v)
 }
 
 func (vm *VM) EnvString(k string, v string) {
-	vm.stack[vm.env[k]] = reflect.ValueOf(v)
+	vm.stack[vm.env[k]] = stackValueFrom(v)
 }
 
 func (v *VM) Result() any {
@@ -333,12 +339,12 @@ func (v *VM) Execute() (errRes error) {
 				closureVars = append(closureVars, closureVar)
 			}
 
-			v.push(reflect.ValueOf(&closure{codePointer: ip, nargs: n, varargs: rest, values: closureVars}))
+			v.push(stackValueFrom(&closure{codePointer: ip, nargs: n, varargs: rest, values: closureVars}))
 		case opPushField:
 			variableAddr := v.readBasePointerAddr()
 			fieldPathAddr := v.readBasePointerAddr()
 			structValue := v.elem(v.getStackValueByAddress(variableAddr))
-			path := v.getStackValueByAddress(fieldPathAddr).Interface().(string)
+			path := v.getStackValueByAddress(fieldPathAddr).Interface().(Label)
 			rv := v.fieldByPath(structValue, path)
 			v.push(rv)
 		case opStore:
@@ -351,7 +357,7 @@ func (v *VM) Execute() (errRes error) {
 			variableAddr := v.readBasePointerAddr()
 			fieldPathAddr := v.readBasePointerAddr()
 
-			path := v.getStackValueByAddress(fieldPathAddr).Interface().(string)
+			path := v.getStackValueByAddress(fieldPathAddr).Interface().(Label)
 			rv := v.elem(v.getStackValueByAddress(variableAddr))
 			if !rv.CanAddr() {
 				errorx.Panic(errorx.IllegalArgument.New("can't store field %s in non addressable structure", path))
@@ -366,11 +372,11 @@ func (v *VM) Execute() (errRes error) {
 			chFl := v.next()
 			switch v1.Kind() {
 			case reflect.Float64, reflect.Float32:
-				v.push(reflect.ValueOf(cmp(v1.Float(), v2.Float(), chFl)))
+				v.push(stackValueFrom(cmp(v1.Float(), v2.Float(), chFl)))
 			case reflect.Int, reflect.Int32, reflect.Int64, reflect.Int8:
-				v.push(reflect.ValueOf(cmp(v1.Int(), v2.Int(), chFl)))
+				v.push(stackValueFrom(cmp(v1.Int(), v2.Int(), chFl)))
 			case reflect.String:
-				v.push(reflect.ValueOf(cmp(v1.String(), v2.String(), chFl)))
+				v.push(stackValueFrom(cmp(v1.String(), v2.String(), chFl)))
 			default:
 				errorx.Panic(errorx.IllegalArgument.New("unexpected type %+v for cmp operation", v1.Type()))
 			}
@@ -379,7 +385,7 @@ func (v *VM) Execute() (errRes error) {
 			v2 := v.elem(v.pop())
 			if v1.Kind() == reflect.String || v2.Kind() == reflect.String {
 				if v1.Kind() == reflect.String && v2.Kind() == reflect.String {
-					v.push(reflect.ValueOf(v2.String() + v1.String()))
+					v.push(stackValueFrom(v2.String() + v1.String()))
 					break
 				}
 				errorx.Panic(errorx.IllegalArgument.New("unexpected types %v and %v for ADD operation", v2.Type(), v1.Type()))
@@ -388,9 +394,9 @@ func (v *VM) Execute() (errRes error) {
 				errorx.Panic(errorx.IllegalArgument.New("unexpected types %v and %v for ADD operation", v2.Type(), v1.Type()))
 			}
 			if isFloatKind(v1.Kind()) || isFloatKind(v2.Kind()) {
-				v.push(reflect.ValueOf(v2.Convert(floatType).Float() + v1.Convert(floatType).Float()))
+				v.push(stackValueFrom(v2.Convert(floatType).Float() + v1.Convert(floatType).Float()))
 			} else {
-				v.push(reflect.ValueOf(v2.Int() + v1.Int()))
+				v.push(stackValueFrom(v2.Int() + v1.Int()))
 			}
 		case opSub:
 			v1 := v.elem(v.pop())
@@ -399,9 +405,9 @@ func (v *VM) Execute() (errRes error) {
 				errorx.Panic(errorx.IllegalArgument.New("unexpected types %v and %v for SUB operation", v2.Type(), v1.Type()))
 			}
 			if isFloatKind(v1.Kind()) || isFloatKind(v2.Kind()) {
-				v.push(reflect.ValueOf(v2.Convert(floatType).Float() - v1.Convert(floatType).Float()))
+				v.push(stackValueFrom(v2.Convert(floatType).Float() - v1.Convert(floatType).Float()))
 			} else {
-				v.push(reflect.ValueOf(v2.Int() - v1.Int()))
+				v.push(stackValueFrom(v2.Int() - v1.Int()))
 			}
 		case opDiv:
 			v1 := v.elem(v.pop())
@@ -409,7 +415,7 @@ func (v *VM) Execute() (errRes error) {
 			if !isNumberKind(v1.Kind()) || !isNumberKind(v2.Kind()) {
 				errorx.Panic(errorx.IllegalArgument.New("unexpected types %v and %v for DIV operation", v2.Type(), v1.Type()))
 			}
-			v.push(reflect.ValueOf(v2.Convert(floatType).Float() / v1.Convert(floatType).Float()))
+			v.push(stackValueFrom(v2.Convert(floatType).Float() / v1.Convert(floatType).Float()))
 		case opMul:
 			v1 := v.elem(v.pop())
 			v2 := v.elem(v.pop())
@@ -417,9 +423,9 @@ func (v *VM) Execute() (errRes error) {
 				errorx.Panic(errorx.IllegalArgument.New("unexpected types %v and %v for MUL operation", v2.Type(), v1.Type()))
 			}
 			if isFloatKind(v1.Kind()) || isFloatKind(v2.Kind()) {
-				v.push(reflect.ValueOf(v2.Convert(floatType).Float() * v1.Convert(floatType).Float()))
+				v.push(stackValueFrom(v2.Convert(floatType).Float() * v1.Convert(floatType).Float()))
 			} else {
-				v.push(reflect.ValueOf(v2.Int() * v1.Int()))
+				v.push(stackValueFrom(v2.Int() * v1.Int()))
 			}
 		case opCmpBool:
 			v1 := v.elem(v.pop()).Bool()
@@ -427,16 +433,16 @@ func (v *VM) Execute() (errRes error) {
 			chFl := v.next()
 
 			if chFl&cmpFlagEq > 0 {
-				v.push(reflect.ValueOf(v1 == v2))
+				v.push(stackValueFrom(v1 == v2))
 			}
 		case opTrue:
 			v1 := v.pop().Bool()
 			chFl := v.next()
 			if chFl&cmpFlagEq > 0 {
-				v.push(reflect.ValueOf(v1))
+				v.push(stackValueFrom(v1))
 			}
 		case opNil:
-			v.push(reflect.ValueOf(v.pop().IsNil()))
+			v.push(stackValueFrom(v.pop().IsNil()))
 		case opBr:
 			condition := v.pop().Bool()
 			addr := v.readPtr()
@@ -448,7 +454,7 @@ func (v *VM) Execute() (errRes error) {
 		case opExtCall:
 			fn := v.elem(v.pop())
 			nargs := v.readInt()
-			args := make([]reflect.Value, nargs)
+			args := make([]stackValue, nargs)
 			for i := 0; i < nargs; i++ {
 				args[nargs-i-1] = v.elem(v.pop())
 			}
@@ -461,7 +467,7 @@ func (v *VM) Execute() (errRes error) {
 			if nargs != cl.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
 			}
-		vars := make([]closureVariable, 0, len(cl.values))
+			vars := make([]closureVariable, 0, len(cl.values))
 			for _, vv := range cl.values {
 				switch vv.vt {
 				case valTypeLocal:
@@ -491,10 +497,10 @@ func (v *VM) Execute() (errRes error) {
 			v.pushRestArgIfNeeded(nargs, cl)
 
 			addr := cl.codePointer
-			v.push(reflect.ValueOf(cl.nargs))
-			v.push(reflect.ValueOf(vars))
-			v.push(reflect.ValueOf(v.bp))
-			v.push(reflect.ValueOf(v.ip))
+			v.push(stackValueFrom(cl.nargs))
+			v.push(stackValueFrom(vars))
+			v.push(stackValueFrom(v.bp))
+			v.push(stackValueFrom(v.ip))
 			v.bp = v.sp - callFrameOffset
 			v.goTo(addr)
 		case opPopCall:
@@ -512,19 +518,19 @@ func (v *VM) Execute() (errRes error) {
 
 			v.pushRestArgIfNeeded(nargs, cl)
 			addr := cl.codePointer
-			v.push(reflect.ValueOf(cl.nargs))
-			v.push(reflect.ValueOf(cl.values))
-			v.push(reflect.ValueOf(v.bp))
-			v.push(reflect.ValueOf(v.ip))
+			v.push(stackValueFrom(cl.nargs))
+			v.push(stackValueFrom(cl.values))
+			v.push(stackValueFrom(v.bp))
+			v.push(stackValueFrom(v.ip))
 			v.bp = v.sp - callFrameOffset
 			v.goTo(addr)
 		case opCall:
 			addr := v.readPtr()
 			nargs := v.readInt()
-			v.push(reflect.ValueOf(nargs))
-			v.push(reflect.ValueOf(nil))
-			v.push(reflect.ValueOf(v.bp))
-			v.push(reflect.ValueOf(v.ip))
+			v.push(stackValueFrom(nargs))
+			v.push(stackValueFrom(nil))
+			v.push(stackValueFrom(v.bp))
+			v.push(stackValueFrom(v.ip))
 			v.bp = v.sp - callFrameOffset
 			v.goTo(addr)
 		case opRet:
@@ -541,7 +547,7 @@ func (v *VM) Execute() (errRes error) {
 		case opJmp:
 			v.goTo(v.readPtr())
 		case opNot:
-			v.push(reflect.ValueOf(!v.pop().Bool()))
+			v.push(stackValueFrom(!v.pop().Bool()))
 		case opCons:
 			first := v.pop()
 			second := v.pop()
@@ -556,13 +562,13 @@ func (v *VM) Execute() (errRes error) {
 				}
 			}
 
-			v.push(reflect.ValueOf(res))
+			v.push(stackValueFrom(res))
 		case opCar:
 			c := (*cons)(v.pop().UnsafePointer())
-			v.push(reflect.ValueOf(c.first()))
+			v.push(stackValueFrom(c.first()))
 		case opCdr:
 			c := (*cons)(v.pop().UnsafePointer())
-			v.push(reflect.ValueOf(c.tail()))
+			v.push(stackValueFrom(c.tail()))
 		case opSplice:
 			nextV := v.pop()
 			prevV := v.pop()
@@ -582,9 +588,9 @@ func (v *VM) Execute() (errRes error) {
 			b := &cons{}
 			b.expr = append(prev.expr, next.expr...)
 
-			v.push(reflect.ValueOf(b))
+			v.push(stackValueFrom(b))
 		case opMakeHashTable:
-			v.push(reflect.ValueOf(make(map[any]any)))
+			v.push(stackValueFrom(make(map[any]any)))
 		case opSetHashTableValue:
 			m := v.pop().Interface().(map[any]any)
 			k := v.pop()
@@ -595,12 +601,12 @@ func (v *VM) Execute() (errRes error) {
 			i := v.pop()
 			val, ok := m[i.Interface()]
 			if !ok {
-				v.push(reflect.Value{})
+				v.push(stackValue{})
 			} else {
-				v.push(reflect.ValueOf(val))
+				v.push(stackValueFrom(val))
 			}
 		case opMakeVector:
-			v.push(reflect.ValueOf(make([]any, 0)))
+			v.push(stackValueFrom(make([]any, 0)))
 		case opSetVectorValue:
 			m := v.pop().Interface().([]any)
 			i := v.pop().Int()
@@ -608,10 +614,10 @@ func (v *VM) Execute() (errRes error) {
 		case opGetVectorValue:
 			vec := v.pop()
 			i := v.pop().Convert(intType).Int()
-			var pv reflect.Value
+			var pv stackValue
 			switch vec.Kind() {
 			case reflect.String:
-				pv = reflect.ValueOf(stringRuneAt(vec.String(), i))
+				pv = stackValueFrom(stringRuneAt(vec.String(), i))
 			case reflect.Array, reflect.Slice:
 				pv = vec.Index(int(i))
 			default:
@@ -643,7 +649,7 @@ func (v *VM) Execute() (errRes error) {
 					panic(errorx.Panic(errorx.IllegalArgument.New("can't get length from type %+v", vv.Type())))
 				}
 			}
-			v.push(reflect.ValueOf(l))
+			v.push(stackValueFrom(l))
 		case opContains:
 			container := v.pop()
 			value := v.pop()
@@ -662,7 +668,7 @@ func (v *VM) Execute() (errRes error) {
 			default:
 				panic(errorx.Panic(errorx.IllegalArgument.New("can't check contains in type %+v", container.Type())))
 			}
-			v.push(reflect.ValueOf(res))
+			v.push(stackValueFrom(res))
 		case opPrint:
 			fmt.Printf("%v\n", v.pop())
 		case opNoOp:
@@ -683,7 +689,7 @@ func (v *VM) pushRestArgIfNeeded(nargs int, cl *closure) {
 		expr = append(expr, v.pop())
 	}
 
-	v.push(reflect.ValueOf(&cons{expr: expr}))
+	v.push(stackValueFrom(&cons{expr: expr}))
 }
 
 func (v *VM) readPtr() ptr {
@@ -715,36 +721,36 @@ func (v *VM) getClosureVars() []closureVariable {
 	return v.stack[v.bp+closureVarsOffset].Interface().([]closureVariable)
 }
 
-func (v *VM) getStackValueByAddress(p ptr) reflect.Value {
+func (v *VM) getStackValueByAddress(p ptr) stackValue {
 	return v.stack[p]
 }
 
-func (v *VM) setStackValueByAddress(p ptr, rv reflect.Value) {
+func (v *VM) setStackValueByAddress(p ptr, rv stackValue) {
 	v.stack[p] = rv
 }
 
-func (v *VM) fieldByPath(rv reflect.Value, path string) reflect.Value {
+func (v *VM) fieldByPath(rv stackValue, path Label) stackValue {
 	for {
-		part, rest, ok := strings.Cut(path, ".")
+		part, rest, ok := strings.Cut(path.String(), ".")
 		rv = rv.FieldByName(part)
 		if !ok {
 			return rv
 		}
-		path = rest
+		path = Label(rest)
 	}
 }
 
-func (v *VM) elem(a reflect.Value) reflect.Value {
+func (v *VM) elem(a stackValue) stackValue {
 	for a.IsValid() {
 		switch a.Kind() {
 		case reflect.Interface:
 			if a.IsNil() {
-				return reflect.Value{}
+				return stackValue{}
 			}
 			a = a.Elem()
 		case reflect.Ptr:
 			if a.IsNil() {
-				return reflect.Value{}
+				return stackValue{}
 			}
 			a = a.Elem()
 		default:
@@ -754,7 +760,7 @@ func (v *VM) elem(a reflect.Value) reflect.Value {
 	return a
 }
 
-func (v *VM) store(t reflect.Value, s reflect.Value) {
+func (v *VM) store(t stackValue, s stackValue) {
 	v.elem(t).Set(v.elem(s))
 }
 
@@ -776,7 +782,7 @@ func (v *VM) next() byte {
 	return a
 }
 
-func (v *VM) pop() reflect.Value {
+func (v *VM) pop() stackValue {
 	ret := v.stack[v.sp]
 	v.sp--
 	return ret
@@ -792,7 +798,7 @@ func (v *VM) peek() any {
 	return v.stack[v.sp]
 }
 
-func (v *VM) push(rv reflect.Value) {
+func (v *VM) push(rv stackValue) {
 	v.sp++
 	v.stack[v.sp] = rv
 }
@@ -853,4 +859,8 @@ func isFloatKind(k reflect.Kind) bool {
 
 func isNumberKind(k reflect.Kind) bool {
 	return isIntKind(k) || isFloatKind(k)
+}
+
+func stackValueFrom(v any) stackValue {
+	return reflect.ValueOf(v)
 }

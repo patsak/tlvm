@@ -14,12 +14,12 @@ import (
 )
 
 type VMByteCode struct {
-	globals              map[any]ptr         // pointers to constants
-	globalsList          []reflect.Value     // const stack content
-	labels               map[string]*closure // pointers to labels in code
-	scope                *scope              // current variables scope
-	macrosByName         map[string]macros
-	externalFunctions    map[string]reflect.Value
+	globals              map[any]ptr        // pointers to constants
+	globalsList          []stackValue       // const stack content
+	labels               map[Label]*closure // pointers to labels in code
+	scope                *scope             // current variables scope
+	macrosByName         map[Label]macros
+	externalFunctions    map[Label]stackValue
 	autoIncrementLabelID int
 
 	debugInfo           map[int]string
@@ -54,9 +54,9 @@ func ExtFunctionsOrPanic(funcs map[string]any) CompileOption {
 }
 
 func ExtFunctions(funcs map[string]any) (CompileOption, error) {
-	res := map[string]reflect.Value{}
+	res := map[Label]stackValue{}
 	for k, v := range funcs {
-		rv := reflect.ValueOf(v)
+		rv := stackValueFrom(v)
 		if rv.Kind() != reflect.Func {
 			return nil, errors.New(fmt.Sprintf("value for key %s must be function ", k))
 		}
@@ -64,17 +64,17 @@ func ExtFunctions(funcs map[string]any) (CompileOption, error) {
 			return nil, errors.New(fmt.Sprintf("function must return single value"))
 		}
 
-		res[k] = rv
+		res[Label(k)] = rv
 	}
 	return func(bt *VMByteCode) {
 		bt.externalFunctions = res
 	}, nil
 }
 
-func EnvVariables(env ...string) CompileOption {
+func EnvVariables(env ...Label) CompileOption {
 	return func(bt *VMByteCode) {
 		for _, k := range env {
-			bt.getOrCreateGlobalAddressFor(reflect.ValueOf(k))
+			bt.getOrCreateGlobalAddressFor(stackValueFrom(k))
 		}
 	}
 }
@@ -106,12 +106,12 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 	}
 
 	vmByteCode := VMByteCode{
-		globals:             map[any]ptr{},
-		labels:              map[string]*closure{},
-		debugInfo:           map[int]string{},
+		globals:             make(map[any]ptr),
+		labels:              make(map[Label]*closure),
+		debugInfo:           make(map[int]string),
 		scope:               newScope(scopeTypeStackFrame, nil),
-		origPositionPointer: map[int]int{},
-		macrosByName:        map[string]macros{},
+		origPositionPointer: make(map[int]int),
+		macrosByName:        make(map[Label]macros),
 	}
 	for _, opt := range options {
 		opt(&vmByteCode)
@@ -132,13 +132,13 @@ func Build(text string, options ...CompileOption) (*VM, error) {
 	return NewVM(compileResult), nil
 }
 
-func (c *VMByteCode) getOrCreateGlobalAddressFor(v reflect.Value) ptr {
+func (c *VMByteCode) getOrCreateGlobalAddressFor(v stackValue) ptr {
 	var vv any
 	if !v.IsValid() {
-		// Invalid reflect.Value is used to represent nil.
+		// Invalid stackValue is used to represent nil.
 		vv = nil
 	} else if v.Kind() == reflect.Func {
-		// Functions must not collide with nil in the globals map key (see zero reflect.Value use for nil),
+		// Functions must not collide with nil in the globals map key (see zero stackValue use for nil),
 		// so we key them by their code pointer.
 		vv = v.Pointer()
 	} else {
@@ -158,11 +158,11 @@ func (c *VMByteCode) findGlobalAddr(v any) (ptrAndType, bool) {
 	return ptrAndType{res, valTypeGlobal}, ok
 }
 
-func (c *VMByteCode) storeFunction(cv string, cl *closure) {
+func (c *VMByteCode) storeFunction(cv Label, cl *closure) {
 	c.labels[cv] = cl
 }
 
-func (c *VMByteCode) findFunction(cv string) (*closure, bool) {
+func (c *VMByteCode) findFunction(cv Label) (*closure, bool) {
 	v, ok := c.labels[cv]
 	if !ok {
 		return nil, false
@@ -205,7 +205,7 @@ func (c *VMByteCode) writeBool(b bool) *VMByteCode {
 }
 
 func (c *VMByteCode) writeConstAddr(v any) *VMByteCode {
-	return c.writePointer(c.getOrCreateGlobalAddressFor(reflect.ValueOf(v)))
+	return c.writePointer(c.getOrCreateGlobalAddressFor(stackValueFrom(v)))
 }
 
 var emptyAddr = []byte{0, 0}
@@ -372,8 +372,27 @@ func emitGeth(sexp SExpressions, cur *VMByteCode) {
 	cur.writeOpCode(opGetHashTableValue)
 }
 
-func variableParts(s string) []string {
-	return strings.Split(s, ".")
+type ValuePath []Label
+
+func (v ValuePath) VariableName() Label {
+	return v[0]
+}
+
+func variablePath(l Label) ValuePath {
+	partsStrings := strings.Split(l.String(), ".")
+	parts := make(ValuePath, 0, len(partsStrings))
+	for _, part := range partsStrings {
+		parts = append(parts, Label(part))
+	}
+	return parts
+}
+
+func labelFromParts(parts []Label) Label {
+	var partsStrings []string
+	for _, part := range parts {
+		partsStrings = append(partsStrings, string(part))
+	}
+	return Label(strings.Join(partsStrings, "."))
 }
 
 func emitAnd(v *cons, cur *VMByteCode) {
@@ -459,7 +478,7 @@ func emitDefineFunction(v *cons, cur *VMByteCode) {
 
 	cur.inNewScope(scopeTypeStackFrame, func() {
 		fn := emitFunction(l.headLiteralValue(), l.tail(), cur)
-		fn.globalAddress = cur.getOrCreateGlobalAddressFor(reflect.ValueOf(fn))
+		fn.globalAddress = cur.getOrCreateGlobalAddressFor(stackValueFrom(fn))
 		funcDefinitionLength := cur.pos() - startDefinitionAddress
 		cur.modify(endLambdaAddress, offsetAddress(int(funcDefinitionLength)))
 
@@ -491,7 +510,7 @@ func emitDefineFunction(v *cons, cur *VMByteCode) {
 	})
 }
 
-func emitFunction(name string, expr SExpressions, cur *VMByteCode) *closure {
+func emitFunction(name Label, expr SExpressions, cur *VMByteCode) *closure {
 	cur.scope.addressOffset[valTypeLocal] = callFrameOffset + 1 // skip stack entries stored by CALL opcode
 
 	cur.debug("define function %s", name)
@@ -649,18 +668,20 @@ func emitIf(cc *cons, cur *VMByteCode) {
 func emitSetq(cc *cons, cur *VMByteCode) {
 	l := consToList(cc).tail()
 
-	variableName := l.headLiteralValue()
+	valueFullPath := l.headLiteralValue()
+
 	rightValue := l[1]
 	emit(rightValue, cur)
-	parts := strings.Split(variableName, ".")
-	vname := parts[0]
+	
+	valuePath := variablePath(valueFullPath)
 
-	addr, ok := cur.scope.resolveAddress(vname)
+	variableName := valuePath.VariableName()
+	addr, ok := cur.scope.resolveAddress(variableName)
 	if !ok {
-		addr, ok = cur.findGlobalAddr(vname)
+		addr, ok = cur.findGlobalAddr(variableName)
 	}
 	if !ok {
-		addr = cur.scope.createNextAddr(vname, valTypeLocal)
+		addr = cur.scope.createNextAddr(variableName, valTypeLocal)
 	}
 
 	switch addr.tp {
@@ -668,12 +689,12 @@ func emitSetq(cc *cons, cur *VMByteCode) {
 		cur.writeOpCode(opStoreClosureVal).writePointer(addr.ptr)
 		cur.writeOpCode(opPushClosureVal).writePointer(addr.ptr)
 	case valTypeLocal, valTypeGlobal:
-		parts := strings.Split(l.headLiteralValue(), ".")
+		parts := variablePath(l.headLiteralValue())
 		if len(parts) == 1 {
 			cur.writeOpCode(opStore).writePointer(addr.ptr)
 			cur.writeOpCode(opPush).writePointer(addr.ptr)
 		} else {
-			fieldPath := strings.Join(parts[1:], ".")
+			fieldPath := labelFromParts(parts[1:])
 			cur.writeOpCode(opStoreField).writePointer(addr.ptr).writeConstAddr(fieldPath)
 			cur.writeOpCode(opPushField).writePointer(addr.ptr).writeConstAddr(fieldPath)
 		}
@@ -683,7 +704,7 @@ func emitSetq(cc *cons, cur *VMByteCode) {
 }
 
 func emitList(sexp SExpressions, cur *VMByteCode) {
-	cur.writeOpCode(opPush).writePointer(cur.getOrCreateGlobalAddressFor(reflect.Value{}))
+	cur.writeOpCode(opPush).writePointer(cur.getOrCreateGlobalAddressFor(stackValue{}))
 
 	for i := len(sexp) - 1; i >= 1; i-- {
 		emit(sexp[i], cur)
@@ -781,7 +802,7 @@ func expandMacros(v *cons, cur *VMByteCode) any {
 	vm.code = append(vm.code, macros.code...)
 
 	for i := range args {
-		vm.push(reflect.ValueOf(args[i]))
+		vm.push(stackValueFrom(args[i]))
 	}
 
 	vm.bp = vm.sp // prepare base pointer
@@ -844,7 +865,7 @@ func emitBacktick(v any, cur *VMByteCode) {
 	switch vv := v.(type) {
 	case *cons:
 		l := consToList(vv)
-		cur.writeOpCode(opPush).writePointer(cur.getOrCreateGlobalAddressFor(reflect.Value{}))
+		cur.writeOpCode(opPush).writePointer(cur.getOrCreateGlobalAddressFor(stackValue{}))
 		for i := 0; i < len(l); i++ {
 			v := l[len(l)-1-i]
 			if com, ok := matchMacroSpecialSymbol(v, keywordComma); ok {
@@ -878,7 +899,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 	cur.writeOpCode(opJmp).iptr(&endLambdaAddress).writeEmptyAddress().iptr(&startDefinitionAddress)
 
 	cur.inNewScope(scopeTypeStackFrame, func() {
-		fn := emitFunction(labelID, l[1:], cur)
+		fn := emitFunction(Label(labelID), l[1:], cur)
 
 		funcDefinitionLength := cur.pos() - startDefinitionAddress
 		cur.modify(endLambdaAddress, offsetAddress(int(funcDefinitionLength)))
@@ -886,12 +907,12 @@ func emitLambda(v *cons, cur *VMByteCode) {
 
 		cur.writeOpCode(opPushClosure).
 			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
-			writeInt(fn.nargs).   // lambda arguments count
+			writeInt(fn.nargs). // lambda arguments count
 			writeBool(fn.varargs) // rest args flag
 
 		type closureVar struct {
 			stackAddr  ptr
-			vt         valType
+			valueType  valType
 			closurePtr ptr
 		}
 		var localAddresses []closureVar
@@ -910,9 +931,9 @@ func emitLambda(v *cons, cur *VMByteCode) {
 
 		// write closure variables count
 		cur.writeInt(len(localAddresses))
-		for _, a := range localAddresses {
-			cur.b(byte(a.vt))
-			cur.writePointer(a.stackAddr)
+		for _, localAddress := range localAddresses {
+			cur.b(byte(localAddress.valueType))
+			cur.writePointer(localAddress.stackAddr)
 		}
 	})
 }
@@ -975,23 +996,23 @@ func emitAppend(sexp SExpressions, cur *VMByteCode) {
 	cur.writeOpCode(opAppend)
 }
 
-func emitLiteral(v literal, cur *VMByteCode) ptrAndType {
-	parts := variableParts(v.value)
-	addr, ok := cur.scope.resolveAddress(parts[0])
+func emitLiteral(literal literal, cur *VMByteCode) ptrAndType {
+	valuePath := variablePath(literal.value)
+	addr, ok := cur.scope.resolveAddress(valuePath.VariableName())
 	if !ok {
-		addr, ok = cur.findGlobalAddr(parts[0])
+		addr, ok = cur.findGlobalAddr(valuePath.VariableName())
 		if !ok {
-			errorx.Panic(errorx.IllegalArgument.New("unknown literal '%s'", v.value).WithProperty(errRawTextPositionProperty, v.pos))
+			errorx.Panic(errorx.IllegalArgument.New("unknown literal '%s'", literal.value).WithProperty(errRawTextPositionProperty, literal.pos))
 		}
 	}
 	switch addr.tp {
 	case valTypeClosure:
 		cur.writeOpCode(opPushClosureVal).writePointer(addr.ptr)
 	case valTypeLocal, valTypeGlobal:
-		if len(parts) == 1 {
+		if len(valuePath) == 1 {
 			cur.writeOpCode(opPush).writePointer(addr.ptr)
 		} else {
-			cur.writeOpCode(opPushField).writePointer(addr.ptr).writeConstAddr(strings.Join(parts[1:], "."))
+			cur.writeOpCode(opPushField).writePointer(addr.ptr).writeConstAddr(labelFromParts(valuePath[1:]))
 		}
 	default:
 		errorx.Panic(errorx.IllegalArgument.New("unknown value type '%d'", addr.tp))
@@ -1206,7 +1227,7 @@ func matchMacroSpecialSymbol(input any, symbol string) (any, bool) {
 		return literal{}, false
 	}
 
-	if l.value != symbol {
+	if l.value.String() != symbol {
 		return literal{}, false
 	}
 	return c.tail().first(), true

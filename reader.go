@@ -229,7 +229,7 @@ func (r *tokenReader) read() (_ any, err error) {
 				return number{n, tok.pos}, nil
 			}
 		default:
-			return literal{tok.value, tok.pos}, nil
+			return literal{Label(tok.value), tok.pos}, nil
 		}
 	}
 
@@ -241,5 +241,5 @@ func (r *tokenReader) wrapInCons(name string, pos int) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &cons{expr: []any{s, literal{name, pos}}}, nil
+	return &cons{expr: []any{s, literal{Label(name), pos}}}, nil
 }

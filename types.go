@@ -9,7 +9,7 @@ import (
 
 type SExpressions []any
 
-func (e SExpressions) headLiteralValue() string {
+func (e SExpressions) headLiteralValue() Label {
 	return e[0].(literal).value
 }
 
@@ -26,12 +26,12 @@ type valueAndPosition interface {
 }
 
 type literal struct {
-	value string
+	value Label
 	pos   int
 }
 
 func (l literal) String() string {
-	return l.value
+	return string(l.value)
 }
 
 func (l literal) valueAndPosition() (any, int) {
@@ -177,7 +177,7 @@ func (p ptr) abs(base int) ptr {
 }
 
 type closure struct {
-	name          string            // function name
+	name          Label             // function name
 	codePointer   ptr               // function code pointer
 	globalAddress ptr               // static function stack pointer
 	nargs         int               // number of function arguments
@@ -186,7 +186,9 @@ type closure struct {
 }
 
 type closureVariable struct {
-	value reflect.Value
+	value stackValue
 	vt    valType
 	addr  ptr
 }
+
+type stackValue = reflect.Value
