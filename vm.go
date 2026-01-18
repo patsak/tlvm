@@ -265,7 +265,7 @@ func (vm *VM) Env(k Label, v any) {
 }
 
 func (vm *VM) EnvString(k string, v string) {
-	vm.stack[vm.env[k]] = stackValueFrom(v)
+	vm.stack[vm.env[Label(k)]] = stackValueFrom(v)
 }
 
 func (v *VM) Result() any {
