@@ -137,39 +137,39 @@ func (v *VM) CodeString() string {
 
 		switch opCode(o) {
 		case opPush:
-			b.WriteString(fmt.Sprintf("PUSH %s", v.strStackAddr()))
+			b.WriteString(fmt.Sprintf("PUSH %s", v.formatStackAddr()))
 		case opPushClosure:
-			b.WriteString(fmt.Sprintf("PUSHCLOSURE %s", v.strIpAddr()))
+			b.WriteString(fmt.Sprintf("PUSHCLOSURE %s", v.formatIpAddr()))
 			nargs := v.readInt()
 			rest := v.readBool()
 			nclosurevals := v.readInt()
 			b.WriteString(fmt.Sprintf(", %d args, %t &rest, %d bound variables:", nargs, rest, nclosurevals))
 			for i := 0; i < nclosurevals; i++ {
-				b.WriteString(fmt.Sprintf(" %d", v.next()))
-				b.WriteString(fmt.Sprintf(" %s", v.strStackAddr()))
+				b.WriteString(fmt.Sprintf(" %d", v.readByte()))
+				b.WriteString(fmt.Sprintf(" %s", v.formatStackAddr()))
 			}
 		case opPushField:
-			b.WriteString(fmt.Sprintf("PUSHFIELD %s %s", v.strStackAddr(), v.strStackAddr()))
+			b.WriteString(fmt.Sprintf("PUSHFIELD %s %s", v.formatStackAddr(), v.formatStackAddr()))
 		case opPushClosureVal:
-			b.WriteString(fmt.Sprintf("PUSHCLOSUREVAL %s", v.strStackAddr()))
+			b.WriteString(fmt.Sprintf("PUSHCLOSUREVAL %s", v.formatStackAddr()))
 		case opStoreClosureVal:
-			b.WriteString(fmt.Sprintf("STORECLOSERVAL %s", v.strStackAddr()))
+			b.WriteString(fmt.Sprintf("STORECLOSERVAL %s", v.formatStackAddr()))
 		case opClosureCall:
-			b.WriteString(fmt.Sprintf("CLOSURECALL %s %s", v.strStackAddr(), v.strStackAddr()))
+			b.WriteString(fmt.Sprintf("CLOSURECALL %s %s", v.formatStackAddr(), v.formatStackAddr()))
 		case opStore:
-			b.WriteString(fmt.Sprintf("STORE %s", v.strStackAddr()))
+			b.WriteString(fmt.Sprintf("STORE %s", v.formatStackAddr()))
 		case opStoreField:
-			b.WriteString(fmt.Sprintf("STORE_FIELD %s %s", v.strStackAddr(), v.strStackAddr()))
+			b.WriteString(fmt.Sprintf("STORE_FIELD %s %s", v.formatStackAddr(), v.formatStackAddr()))
 		case opAdd:
 			b.WriteString(fmt.Sprintf("ADD"))
 		case opSub:
 			b.WriteString(fmt.Sprintf("SUB"))
 		case opCmp:
-			b.WriteString(fmt.Sprintf("CMP %d", v.next()))
+			b.WriteString(fmt.Sprintf("CMP %d", v.readByte()))
 		case opCmpBool:
 			b.WriteString(fmt.Sprintf("CMPBOOL"))
 		case opBr:
-			b.WriteString(fmt.Sprintf("BR %s", v.strStackAddr()))
+			b.WriteString(fmt.Sprintf("BR %s", v.formatStackAddr()))
 		case opMul:
 			b.WriteString(fmt.Sprintf("MUL"))
 		case opDiv:
@@ -177,7 +177,7 @@ func (v *VM) CodeString() string {
 		case opCall:
 			b.WriteString(fmt.Sprintf("CALL %d %d", v.readBasePointerAddr(), v.readBasePointerAddr()))
 		case opPopCall:
-			b.WriteString(fmt.Sprintf("POPCALL %s", v.strIpAddr()))
+			b.WriteString(fmt.Sprintf("POPCALL %s", v.formatIpAddr()))
 		case opExtCall:
 			b.WriteString(fmt.Sprintf("EXTCALL %d", v.readBasePointerAddr()))
 		case opRet:
@@ -185,7 +185,7 @@ func (v *VM) CodeString() string {
 		case opFrameReset:
 			b.WriteString(fmt.Sprintf("FRAME_RESET"))
 		case opJmp:
-			b.WriteString(fmt.Sprintf("JMP %s", v.strIpAddr()))
+			b.WriteString(fmt.Sprintf("JMP %s", v.formatIpAddr()))
 		case opNot:
 			b.WriteString("NOT")
 		case opCar:
@@ -313,13 +313,13 @@ func (v *VM) Execute() (errRes error) {
 			vptr := vars[a]
 			v.store(vptr.value, r)
 		case opPushClosure:
-			ip := v.ipAddrArg()
+			ip := v.readIpAddrArg()
 			n := v.readInt()
 			rest := v.readBool()
 			nClosureVars := v.readInt()
 			closureVars := make([]closureVariable, 0, nClosureVars)
 			for i := 0; i < nClosureVars; i++ {
-				vt := valType(v.next())
+				vt := valType(v.readByte())
 				varPtr := v.readPtr()
 				closureVar := closureVariable{addr: varPtr, vt: vt}
 				switch vt {
@@ -369,7 +369,7 @@ func (v *VM) Execute() (errRes error) {
 			v2 := v.elem(v.pop())
 			v1 := v.elem(v.pop())
 
-			chFl := v.next()
+			chFl := v.readByte()
 			switch v1.Kind() {
 			case reflect.Float64, reflect.Float32:
 				v.push(stackValueFrom(cmp(v1.Float(), v2.Float(), chFl)))
@@ -430,14 +430,14 @@ func (v *VM) Execute() (errRes error) {
 		case opCmpBool:
 			v1 := v.elem(v.pop()).Bool()
 			v2 := v.elem(v.pop()).Bool()
-			chFl := v.next()
+			chFl := v.readByte()
 
 			if chFl&cmpFlagEq > 0 {
 				v.push(stackValueFrom(v1 == v2))
 			}
 		case opTrue:
 			v1 := v.pop().Bool()
-			chFl := v.next()
+			chFl := v.readByte()
 			if chFl&cmpFlagEq > 0 {
 				v.push(stackValueFrom(v1))
 			}
@@ -705,7 +705,7 @@ func (v *VM) readInt() int {
 }
 
 func (v *VM) readBool() bool {
-	return v.next() > 0
+	return v.readByte() > 0
 }
 
 func (v *VM) readBasePointerAddr() ptr {
@@ -764,31 +764,25 @@ func (v *VM) store(t stackValue, s stackValue) {
 	v.elem(t).Set(v.elem(s))
 }
 
-func (v *VM) ipAddrArg() ptr {
+func (v *VM) readIpAddrArg() ptr {
 	return v.readPtr().abs(v.ip)
 }
 
-func (v *VM) strStackAddr() string {
+func (v *VM) formatStackAddr() string {
 	return v.readPtr().format("bp")
 }
 
-func (v *VM) strIpAddr() string {
+func (v *VM) formatIpAddr() string {
 	return fmt.Sprintf("%d", v.readPtr().abs(v.ip))
 }
 
-func (v *VM) next() byte {
+func (v *VM) readByte() byte {
 	a := v.code[v.ip]
 	v.ip++
 	return a
 }
 
 func (v *VM) pop() stackValue {
-	ret := v.stack[v.sp]
-	v.sp--
-	return ret
-}
-
-func (v *VM) popRaw() any {
 	ret := v.stack[v.sp]
 	v.sp--
 	return ret
