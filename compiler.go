@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/joomcode/errorx"
 )
@@ -328,6 +329,10 @@ func emit(node any, cur *VMByteCode) {
 				emitLen(consToList(v).tail(), cur)
 			case keywordContains:
 				emitContains(consToList(v).tail(), cur)
+			case keywordDefstruct:
+				emitDefineStruct(consToList(v).tail(), cur)
+			case keywordMake:
+				emitMakeStruct(consToList(v).tail(), cur)
 			default:
 				l := consToList(v)
 				if _, ok := cur.macrosByName[l.headLiteralValue()]; ok {
@@ -672,7 +677,7 @@ func emitSetq(cc *cons, cur *VMByteCode) {
 
 	rightValue := l[1]
 	emit(rightValue, cur)
-	
+
 	valuePath := variablePath(valueFullPath)
 
 	variableName := valuePath.VariableName()
@@ -907,7 +912,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 
 		cur.writeOpCode(opPushClosure).
 			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
-			writeInt(fn.nargs). // lambda arguments count
+			writeInt(fn.nargs).   // lambda arguments count
 			writeBool(fn.varargs) // rest args flag
 
 		type closureVar struct {
@@ -994,6 +999,38 @@ func emitAppend(sexp SExpressions, cur *VMByteCode) {
 	emit(sexp[1], cur) // argument
 	emit(sexp[0], cur) // vector
 	cur.writeOpCode(opAppend)
+}
+
+func emitDefineStruct(v SExpressions, cur *VMByteCode) {
+	structName := v[0].(literal).value
+	fields := v[1:]
+	var structFields []reflect.StructField
+	for i := 0; i < len(fields); i++ {
+		f := fields[i].(literal).value.String()
+		if !unicode.IsUpper([]rune(f)[0]) {
+			errorx.Panic(errorx.IllegalArgument.New("struct field name '%s' must start with uppercase letter", f).WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
+		}
+
+		structFields = append(structFields, reflect.StructField{
+			Name: f,
+			Type: reflect.TypeFor[any](),
+		})
+	}
+
+	structZeroValue := reflect.New(reflect.StructOf(structFields)).Elem()
+
+	ptrToStruct := cur.getOrCreateGlobalAddressFor(stackValueFrom(structZeroValue.Interface()))
+	cur.getOrCreateGlobalAddressFor(stackValueFrom(StructLabel(structName))) // ensure struct label exists
+	cur.globals[StructLabel(structName)] = ptrToStruct
+}
+
+func emitMakeStruct(v SExpressions, cur *VMByteCode) {
+	structName := v[0].(literal).value
+	structPtr, ok := cur.globals[StructLabel(structName)]
+	if !ok {
+		errorx.Panic(errorx.IllegalArgument.New("unknown struct name '%s'", structName).WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
+	}
+	cur.writeOpCode(opMake).writePointer(structPtr)
 }
 
 func emitLiteral(literal literal, cur *VMByteCode) ptrAndType {

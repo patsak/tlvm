@@ -515,6 +515,17 @@ s
 `,
 			wantErr: true,
 		},
+		{
+			name: "structure",
+			code: `
+(defstruct point X Y)
+(setq p (make point))
+(setq p.X 40)
+(setq p.Y 2)
+(+ p.X p.Y)
+`,
+			result: 42,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vmCode, err := Compile(tc.code, tc.options...)

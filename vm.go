@@ -58,6 +58,7 @@ const (
 	opGetVectorValue
 	opLen
 	opContains
+	opMake
 )
 
 const (
@@ -90,6 +91,12 @@ type VM struct {
 type Label string
 
 func (l Label) String() string {
+	return string(l)
+}
+
+type StructLabel string
+
+func (l StructLabel) String() string {
 	return string(l)
 }
 
@@ -222,6 +229,8 @@ func (v *VM) CodeString() string {
 			b.WriteString("LEN")
 		case opContains:
 			b.WriteString("CONTAINS")
+		case opMake:
+			b.WriteString(fmt.Sprintf("MAKE %s", v.formatStackAddr()))
 		case opHalt:
 		default:
 			panic(errorx.IllegalFormat.New("unknown code %d", o))
@@ -669,6 +678,9 @@ func (v *VM) Execute() (errRes error) {
 				panic(errorx.Panic(errorx.IllegalArgument.New("can't check contains in type %+v", container.Type())))
 			}
 			v.push(stackValueFrom(res))
+		case opMake:
+			vv := v.getStackValueByAddress(v.readBasePointerAddr())
+			v.push(stackValueFrom(reflect.New(vv.Type()).Interface()))
 		case opPrint:
 			fmt.Printf("%v\n", v.pop())
 		case opNoOp:
