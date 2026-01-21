@@ -154,6 +154,11 @@ func (c *VMByteCode) getOrCreateGlobalAddressFor(v stackValue) ptr {
 	return c.globals[vv]
 }
 
+func (c *VMByteCode) assignGlobalAddress(from, to any) {
+	c.getOrCreateGlobalAddressFor(stackValueFrom(from)) // assert to exists
+	c.globals[from] = c.getOrCreateGlobalAddressFor(stackValueFrom(to))
+}
+
 func (c *VMByteCode) findGlobalAddr(v any) (ptrAndType, bool) {
 	res, ok := c.globals[v]
 	return ptrAndType{res, valTypeGlobal}, ok
@@ -912,7 +917,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 
 		cur.writeOpCode(opPushClosure).
 			writePointer(offsetAddress(-int(funcDefinitionLength) - 3 /*opcode + address */)).
-			writeInt(fn.nargs).   // lambda arguments count
+			writeInt(fn.nargs). // lambda arguments count
 			writeBool(fn.varargs) // rest args flag
 
 		type closureVar struct {
@@ -1004,24 +1009,22 @@ func emitAppend(sexp SExpressions, cur *VMByteCode) {
 func emitDefineStruct(v SExpressions, cur *VMByteCode) {
 	structName := v[0].(literal).value
 	fields := v[1:]
-	var structFields []reflect.StructField
+
+	structFields := make([]reflect.StructField, 0, len(fields))
 	for i := 0; i < len(fields); i++ {
-		f := fields[i].(literal).value.String()
-		if !unicode.IsUpper([]rune(f)[0]) {
-			errorx.Panic(errorx.IllegalArgument.New("struct field name '%s' must start with uppercase letter", f).WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
+		fieldName := fields[i].(literal).value.String()
+		if !unicode.IsUpper([]rune(fieldName)[0]) {
+			errorx.Panic(errorx.IllegalArgument.New("struct field name '%s' must start with uppercase letter", fieldName).WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
 		}
 
 		structFields = append(structFields, reflect.StructField{
-			Name: f,
+			Name: fieldName,
 			Type: reflect.TypeFor[any](),
 		})
 	}
 
 	structZeroValue := reflect.New(reflect.StructOf(structFields)).Elem()
-
-	ptrToStruct := cur.getOrCreateGlobalAddressFor(stackValueFrom(structZeroValue.Interface()))
-	cur.getOrCreateGlobalAddressFor(stackValueFrom(StructLabel(structName))) // ensure struct label exists
-	cur.globals[StructLabel(structName)] = ptrToStruct
+	cur.assignGlobalAddress(StructLabel(structName), structZeroValue.Interface())
 }
 
 func emitMakeStruct(v SExpressions, cur *VMByteCode) {
