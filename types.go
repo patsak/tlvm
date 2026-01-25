@@ -125,8 +125,8 @@ func (c *consBuilder) append(e any) {
 	c.expr = append(c.expr, e)
 }
 
-func (c *consBuilder) build() *cons {
-	v := &cons{expr: c.expr}
+func (c *consBuilder) build(pos int) *cons {
+	v := &cons{expr: c.expr, pos: pos}
 	slices.Reverse(v.expr)
 	return v
 }

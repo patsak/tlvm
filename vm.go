@@ -1,8 +1,11 @@
 package tlvm
 
 import (
+	cmpf "cmp"
 	"fmt"
 	"reflect"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -120,7 +123,7 @@ func NewVM(output *VMByteCode) *VM {
 
 	vm.labels = output.labels
 	vm.debugInfo = output.debugInfo
-	vm.originalTextPositionPointer = output.origPositionPointer
+	vm.originalTextPositionPointer = output.origTextPositionPointer
 	return vm
 }
 
@@ -295,12 +298,16 @@ func (v *VM) Execute() (errRes error) {
 		}
 
 		if v, ok := err.(error); ok {
+			if errx := errorx.Cast(v); errx == nil {
+				v = errorx.Decorate(v, "while executing code")
+			}
 			errRes = v
 		} else {
 			errRes = errorx.IllegalState.New("%v", err)
 		}
 
-		errRes = errorx.Decorate(errRes, "VM instruction: %v", v.ip)
+		errRes = errorx.Cast(errRes).
+			WithProperty(errRawTextPositionProperty, v.getTextPositionByCodePointer())
 	}()
 
 	for v.ip < len(v.code) {
@@ -811,6 +818,29 @@ func (v *VM) push(rv stackValue) {
 
 func (v *VM) goTo(p ptr) {
 	v.ip = int(p.abs(v.ip))
+}
+
+func (v *VM) getTextPositionByCodePointer() int {
+	type textPointer struct {
+		codePointer  int
+		textPosition int
+	}
+
+	var pairs []textPointer
+	for codePointer, textPosition := range v.originalTextPositionPointer {
+		pairs = append(pairs, textPointer{codePointer, textPosition})
+	}
+
+	slices.SortFunc(pairs, func(l, r textPointer) int {
+		return cmpf.Compare(l.codePointer, r.codePointer)
+	})
+
+	i, _ := sort.Find(len(pairs), func(i int) int {
+		res := cmpf.Compare(v.ip, pairs[i].codePointer)
+		return res
+	})
+
+	return pairs[max(i-1, 0)].textPosition
 }
 
 func stringRuneAt(s string, index int64) string {

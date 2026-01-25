@@ -23,9 +23,9 @@ type VMByteCode struct {
 	externalFunctions    map[Label]stackValue
 	autoIncrementLabelID int
 
-	debugInfo           map[int]string
-	origPositionPointer map[int]int
-	enableDebugInfo     bool
+	debugInfo               map[int]string
+	origTextPositionPointer map[int]int
+	enableDebugInfo         bool
 
 	definedFunctions []byte // code section with defined functions
 	code             []byte // result code
@@ -98,21 +98,21 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 			err = errorx.IllegalArgument.New("%v", errRec)
 			return
 		}
-		err = wrapCompilationError(err, text)
+		err = wrapErrorWithTextPosition(err, text)
 	}()
 
 	expressions, err := Read(text)
 	if err != nil {
-		return nil, wrapCompilationError(err, text)
+		return nil, wrapErrorWithTextPosition(err, text)
 	}
 
 	vmByteCode := VMByteCode{
-		globals:             make(map[any]ptr),
-		labels:              make(map[Label]*closure),
-		debugInfo:           make(map[int]string),
-		scope:               newScope(scopeTypeStackFrame, nil),
-		origPositionPointer: make(map[int]int),
-		macrosByName:        make(map[Label]macros),
+		globals:                 make(map[any]ptr),
+		labels:                  make(map[Label]*closure),
+		debugInfo:               make(map[int]string),
+		scope:                   newScope(scopeTypeStackFrame, nil),
+		origTextPositionPointer: make(map[int]int),
+		macrosByName:            make(map[Label]macros),
 	}
 	for _, opt := range options {
 		opt(&vmByteCode)
@@ -177,7 +177,7 @@ func (c *VMByteCode) findFunction(cv Label) (*closure, bool) {
 }
 
 func (c *VMByteCode) origPos(pos int) {
-	c.origPositionPointer[len(c.code)-1] = pos
+	c.origTextPositionPointer[len(c.code)-1] = pos
 }
 
 func (c *VMByteCode) b(ops ...byte) *VMByteCode {
@@ -264,6 +264,7 @@ func emit(node any, cur *VMByteCode) {
 
 			emit(v.first(), cur)
 			cur.writeOpCode(opPopCall).writeInt(len(args))
+			cur.origPos(v.pos)
 		case literal:
 			switch first.value {
 			case keywordAnd:
@@ -346,6 +347,7 @@ func emit(node any, cur *VMByteCode) {
 					emitCallFunction(v, cur)
 				}
 			}
+			cur.origPos(v.pos)
 		}
 	case int64, float64, string, str, float, number, boolean:
 		vt := v
@@ -359,6 +361,7 @@ func emit(node any, cur *VMByteCode) {
 		cur.writeOpCode(opPush).writeConstAddr(vt)
 	case literal:
 		emitLiteral(v, cur)
+		cur.origPos(v.pos)
 	default:
 		panic(errorx.IllegalFormat.New("unexpected value %v with type %T", v, v))
 	}
@@ -711,6 +714,8 @@ func emitSetq(cc *cons, cur *VMByteCode) {
 	default:
 		errorx.Panic(errorx.IllegalArgument.New("unknown value type %d", addr.tp).WithProperty(errRawTextPositionProperty, cc.pos))
 	}
+	cur.origPos(cc.pos)
+
 }
 
 func emitList(sexp SExpressions, cur *VMByteCode) {
@@ -802,7 +807,7 @@ func expandMacros(v *cons, cur *VMByteCode) any {
 		for _, a := range restArgs {
 			consBuilder.append(a)
 		}
-		initCons := consBuilder.build()
+		initCons := consBuilder.build(v.pos)
 		args[macros.nargs-1] = initCons
 		args = args[:macros.nargs]
 	}
@@ -1012,14 +1017,48 @@ func emitDefineStruct(v SExpressions, cur *VMByteCode) {
 
 	structFields := make([]reflect.StructField, 0, len(fields))
 	for i := 0; i < len(fields); i++ {
-		fieldName := fields[i].(literal).value.String()
+		var fieldName string
+		tp := reflect.TypeFor[any]()
+		switch fields[i].(type) {
+		case literal:
+			fieldName = fields[i].(literal).value.String()
+
+		case *cons:
+			fieldCons := fields[i].(*cons)
+			fieldList := consToList(fieldCons)
+			fieldName = fieldList[0].(literal).value.String()
+
+			if (len(fieldList)-1)%2 != 0 {
+				errorx.Panic(errorx.IllegalState.New("field contain pairs of field attributes").WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
+			}
+			for i := 1; i < len(fieldList); i += 2 {
+				attrName := fieldList[i].(literal).value
+				attrValue := fieldList[i+1].(literal).value.String()
+				switch attrName {
+				case ":type":
+					switch attrValue {
+					case "int":
+						tp = reflect.TypeFor[int64]()
+					case "float":
+						tp = reflect.TypeFor[float64]()
+					case "string":
+						tp = reflect.TypeFor[string]()
+					default:
+						errorx.Panic(errorx.IllegalArgument.New("unknown struct field attribute '%s'", attrName).WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
+					}
+				default:
+					errorx.Panic(errorx.IllegalArgument.New("unknown struct field attribute '%s'", attrName).WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
+				}
+			}
+		}
+
 		if !unicode.IsUpper([]rune(fieldName)[0]) {
 			errorx.Panic(errorx.IllegalArgument.New("struct field name '%s' must start with uppercase letter", fieldName).WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
 		}
 
 		structFields = append(structFields, reflect.StructField{
 			Name: fieldName,
-			Type: reflect.TypeFor[any](),
+			Type: tp,
 		})
 	}
 
@@ -1217,7 +1256,7 @@ func consToListN(c *cons, n int) SExpressions {
 	return cp[:min(n, len(c.expr))]
 }
 
-func wrapCompilationError(err error, rawText string) error {
+func wrapErrorWithTextPosition(err error, rawText string) error {
 	var (
 		ok  bool
 		pos any
@@ -1239,21 +1278,13 @@ func wrapCompilationError(err error, rawText string) error {
 		return err
 	}
 	posInt := pos.(int)
-	if posInt >= len(rawText) {
+
+	errorLine := ShowErrorLine(rawText, posInt)
+	if len(errorLine) == 0 {
 		return err
 	}
-	lineStart := strings.LastIndexByte(rawText[:posInt], '\n')
-	if lineStart == -1 {
-		lineStart = 0
-	}
-	lineEnd := strings.IndexByte(rawText[posInt:], '\n')
-	if lineEnd == -1 {
-		lineEnd = len(rawText)
-	} else {
-		lineEnd = posInt + lineEnd
-	}
 
-	return errorx.Decorate(err, "Code: %s", rawText[lineStart:posInt]+"^"+rawText[posInt:lineEnd])
+	return errorx.Decorate(err, "Code: %s", errorLine)
 }
 
 func matchMacroSpecialSymbol(input any, symbol string) (any, bool) {
