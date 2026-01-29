@@ -196,7 +196,7 @@ func (r *tokenReader) read() (_ any, err error) {
 			if r.hasNext() {
 				r.next()
 			}
-			return consBuilder.build(), nil
+			return consBuilder.build(tok.pos), nil
 		case tok.value == "'":
 			return r.wrapInCons(keywordQuote, tok.pos)
 		case tok.value == "`":

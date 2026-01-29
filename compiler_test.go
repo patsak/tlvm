@@ -518,7 +518,10 @@ s
 		{
 			name: "structure",
 			code: `
-(defstruct point X Y)
+(defstruct point 
+	(X :type int) 
+	(Y :type int)
+)
 (setq p (make point))
 (setq p.X 40)
 (setq p.Y 2)
@@ -549,6 +552,26 @@ s
 			}
 		})
 	}
+}
+
+func TestErrorLine(t *testing.T) {
+	text := `
+(defstruct point 
+	(X :type int) 
+	(Y :type int)
+)
+(setq p (make point))
+(setq l "40")
+(setq p.X l)
+(setq p.Y 2)
+(+ p.X p.Y)
+`
+	vmCode := compile(t, text)
+	vm := NewVM(vmCode)
+	err := vm.Execute()
+	require.Error(t, err)
+	require.Equal(t, `common.illegal_state: reflect.Set: value of type string is not assignable to type int64
+line 8: (setq p.X ^l)`, FormatErrorWithTextPosition(err, text))
 }
 
 func TestTailCallOptimizationLargeN(t *testing.T) {
