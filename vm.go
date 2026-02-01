@@ -292,22 +292,24 @@ func (v *VM) Reset() {
 
 func (v *VM) Execute() (errRes error) {
 	defer func() {
-		err := recover()
-		if err == nil {
+		rec := recover()
+		if rec == nil {
 			return
 		}
 
-		if v, ok := err.(error); ok {
-			if errx := errorx.Cast(v); errx == nil {
-				v = errorx.Decorate(v, "while executing code")
-			}
-			errRes = v
-		} else {
-			errRes = errorx.IllegalState.New("%v", err)
+		err, ok := errorx.ErrorFromPanic(rec)
+		if !ok {
+			err = errorx.IllegalState.New("%v", rec)
 		}
 
-		errRes = errorx.Cast(errRes).
-			WithProperty(errRawTextPositionProperty, v.getTextPositionByCodePointer())
+		errRes = err
+
+		errx := errorx.Cast(err)
+		if errx == nil {
+			return
+		}
+
+		errRes = errx.WithProperty(errRawTextPositionProperty, v.getTextPositionByCodePointer())
 	}()
 
 	for v.ip < len(v.code) {
@@ -315,19 +317,20 @@ func (v *VM) Execute() (errRes error) {
 		v.ip++
 		switch opCode(o) {
 		case opPush:
-			vv := v.getStackValueByAddress(v.readBasePointerAddr())
-			v.push(vv)
+			addr := v.readBasePointerAddr()
+			stackValueByAddress := v.getStackValueByAddress(addr)
+			v.push(stackValueByAddress)
 		case opPushClosureVal:
-			a := v.readClosureAddr()
+			addr := v.readClosureAddr()
 			vars := v.getClosureVars()
-			closureVar := vars[a]
+			closureVar := vars[addr]
 			v.push(closureVar.value)
 		case opStoreClosureVal:
-			r := v.pop()
-			a := v.readClosureAddr()
-			vars := v.getClosureVars()
-			vptr := vars[a]
-			v.store(vptr.value, r)
+			valueToStore := v.pop()
+			addr := v.readClosureAddr()
+			closureVars := v.getClosureVars()
+			closureVar := closureVars[addr]
+			v.store(closureVar.value, valueToStore)
 		case opPushClosure:
 			ip := v.readIpAddrArg()
 			n := v.readInt()
@@ -359,28 +362,27 @@ func (v *VM) Execute() (errRes error) {
 		case opPushField:
 			variableAddr := v.readBasePointerAddr()
 			fieldPathAddr := v.readBasePointerAddr()
-			structValue := v.elem(v.getStackValueByAddress(variableAddr))
+			stackValueByAddress := v.elem(v.getStackValueByAddress(variableAddr))
 			path := v.getStackValueByAddress(fieldPathAddr).Interface().(Label)
-			rv := v.fieldByPath(structValue, path)
-			v.push(rv)
+			stackFieldValue := v.fieldByPath(stackValueByAddress, path)
+			v.push(stackFieldValue)
 		case opStore:
-			vv := v.pop()
-			a := v.readBasePointerAddr()
-			v.stack[a] = vv
+			valueToStore := v.pop()
+			addr := v.readBasePointerAddr()
+			v.stack[addr] = valueToStore
 		case opStoreField:
-			vv := v.pop()
+			valueToStore := v.pop()
 
 			variableAddr := v.readBasePointerAddr()
 			fieldPathAddr := v.readBasePointerAddr()
 
 			path := v.getStackValueByAddress(fieldPathAddr).Interface().(Label)
-			rv := v.elem(v.getStackValueByAddress(variableAddr))
-			if !rv.CanAddr() {
+			destinationValue := v.elem(v.getStackValueByAddress(variableAddr))
+			if !destinationValue.CanAddr() {
 				errorx.Panic(errorx.IllegalArgument.New("can't store field %s in non addressable structure", path))
 			}
-			rv = v.fieldByPath(rv, path)
-
-			rv.Set(vv)
+			destinationValueField := v.fieldByPath(destinationValue, path)
+			destinationValueField.Set(valueToStore)
 		case opCmp:
 			v2 := v.elem(v.pop())
 			v1 := v.elem(v.pop())
@@ -477,14 +479,14 @@ func (v *VM) Execute() (errRes error) {
 			values := fn.Call(args)
 			v.push(values[0])
 		case opClosureCall:
-			a := v.readBasePointerAddr()
-			cl := v.getStackValueByAddress(a).Interface().(*closure)
+			closureAddress := v.readBasePointerAddr()
+			closureValue := v.getStackValueByAddress(closureAddress).Interface().(*closure)
 			nargs := v.readInt()
-			if nargs != cl.nargs {
+			if nargs != closureValue.nargs {
 				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function"))
 			}
-			vars := make([]closureVariable, 0, len(cl.values))
-			for _, vv := range cl.values {
+			vars := make([]closureVariable, 0, len(closureValue.values))
+			for _, vv := range closureValue.values {
 				switch vv.vt {
 				case valTypeLocal:
 					// bind to a stack slot in the caller frame by reference:
@@ -510,10 +512,10 @@ func (v *VM) Execute() (errRes error) {
 
 				vars = append(vars, vv)
 			}
-			v.pushRestArgIfNeeded(nargs, cl)
+			v.pushRestArgIfNeeded(nargs, closureValue)
 
-			addr := cl.codePointer
-			v.push(stackValueFrom(cl.nargs))
+			addr := closureValue.codePointer
+			v.push(stackValueFrom(closureValue.nargs))
 			v.push(stackValueFrom(vars))
 			v.push(stackValueFrom(v.bp))
 			v.push(stackValueFrom(v.ip))
@@ -521,21 +523,21 @@ func (v *VM) Execute() (errRes error) {
 			v.goTo(addr)
 		case opPopCall:
 			clu := v.pop().Interface()
-			cl, ok := clu.(*closure)
+			closureValue, ok := clu.(*closure)
 			if !ok {
 				errorx.Panic(errorx.IllegalState.New("can't cast %T to closure", clu))
 			}
 			nargs := v.readInt()
 
-			if !cl.varargs && nargs != cl.nargs ||
-				cl.varargs && nargs < cl.nargs {
-				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function %s", cl.name))
+			if !closureValue.varargs && nargs != closureValue.nargs ||
+				closureValue.varargs && nargs < closureValue.nargs {
+				errorx.Panic(errorx.IllegalState.New("illegal arguments count to call function %s", closureValue.name))
 			}
 
-			v.pushRestArgIfNeeded(nargs, cl)
-			addr := cl.codePointer
-			v.push(stackValueFrom(cl.nargs))
-			v.push(stackValueFrom(cl.values))
+			v.pushRestArgIfNeeded(nargs, closureValue)
+			addr := closureValue.codePointer
+			v.push(stackValueFrom(closureValue.nargs))
+			v.push(stackValueFrom(closureValue.values))
 			v.push(stackValueFrom(v.bp))
 			v.push(stackValueFrom(v.ip))
 			v.bp = v.sp - callFrameOffset
@@ -626,6 +628,9 @@ func (v *VM) Execute() (errRes error) {
 		case opSetVectorValue:
 			m := v.pop().Interface().([]any)
 			i := v.pop().Int()
+			if i < 0 || int(i) >= len(m) {
+				errorx.Panic(errorx.IllegalArgument.New("index %d out of bounds for vector of length %d", i, len(m)))
+			}
 			m[i] = v.pop().Interface()
 		case opGetVectorValue:
 			vec := v.pop()
