@@ -1,6 +1,7 @@
 package tlvm
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -386,7 +387,6 @@ func TestStringOps(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 func TestTCO_RecognisedOnDirectRecursion(t *testing.T) {
-	// Without TCO this would blow the 256-entry stack at n=200 easily.
 	src := `
 (defun loop (n)
   (if (lt n 1)
@@ -394,6 +394,19 @@ func TestTCO_RecognisedOnDirectRecursion(t *testing.T) {
       (loop (- n 1))))
 (loop 200)`
 	require.Equal(t, "done", compileAndRun(t, src))
+}
+
+func TestDynamicStack_DeepNonTCORecursion(t *testing.T) {
+	// Exercises stack growth far beyond the old fixed 256-slot limit.
+	const n = 500
+	src := `
+(defun countdown (n)
+  (if (lt n 1) 0 (+ 1 (countdown (- n 1)))))
+`
+	vm := mustBuild(t, src+fmt.Sprintf("(countdown %d)", n))
+	require.NoError(t, vm.Execute())
+	require.EqualValues(t, n, vm.Result())
+	require.Greater(t, len(vm.stack), 256, "stack should grow for deep frames")
 }
 
 // -----------------------------------------------------------------------------

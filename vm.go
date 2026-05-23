@@ -78,7 +78,7 @@ const (
 )
 
 type VM struct {
-	stack                       [256]stackValue
+	stack                       []stackValue
 	code                        []byte         // byte code
 	cp                          int            // constants top pointer
 	ep                          int            // entry point
@@ -112,6 +112,7 @@ func NewVM(output *VMByteCode) *VM {
 		sp:   -1,
 	}
 	for i := range output.globalsList {
+		vm.growStack(i)
 		vm.stack[i] = output.globalsList[i]
 	}
 	vm.ip = len(output.definedFunctions)
@@ -273,6 +274,7 @@ func (vm *VM) Env(k Label, v any) {
 	if !ok {
 		return
 	}
+	vm.growStack(int(pos))
 	vm.stack[pos] = stackValueFrom(v)
 }
 
@@ -382,6 +384,7 @@ func (v *VM) Execute() (errRes error) {
 		case opStore:
 			valueToStore := v.pop()
 			addr := v.readBasePointerAddr()
+			v.growStack(int(addr))
 			v.stack[addr] = valueToStore
 		case opStoreField:
 			valueToStore := v.pop()
@@ -783,10 +786,12 @@ func (v *VM) getClosureVars() []closureVariable {
 }
 
 func (v *VM) getStackValueByAddress(p ptr) stackValue {
+	v.growStack(int(p))
 	return v.stack[p]
 }
 
 func (v *VM) setStackValueByAddress(p ptr, rv stackValue) {
+	v.growStack(int(p))
 	v.stack[p] = rv
 }
 
@@ -851,11 +856,30 @@ func (v *VM) pop() stackValue {
 
 func (v *VM) push(rv stackValue) {
 	v.sp++
+	v.growStack(v.sp)
 	v.stack[v.sp] = rv
 }
 
 func (v *VM) goTo(p ptr) {
 	v.ip = int(p.abs(v.ip))
+}
+
+func (v *VM) growStack(p int) {
+	need := p + 1
+	if len(v.stack) >= need {
+		return
+	}
+	n := need
+	if n < 16 {
+		n = 16
+	} else {
+		for n < need {
+			n *= 2
+		}
+	}
+	newArray := make([]stackValue, n)
+	copy(newArray, v.stack)
+	v.stack = newArray
 }
 
 func (v *VM) getTextPositionByCodePointer() int {

@@ -588,13 +588,18 @@ func TestTailCallOptimizationLargeN(t *testing.T) {
 		(+ n (sumNoTCO (- n 1)))))
 `
 	const n = 1000
-	expected := fmt.Sprint(int64(n*(n+1)) / 2)
-
-	require.Equal(t, expected, compileAndRun(t, text+fmt.Sprintf("(sumTCO %d 0)", n)))
-
-	vmCode := compile(t, text+fmt.Sprintf("(sumNoTCO %d)", n))
+	expected := int64(n*(n+1)) / 2
+	vmCode := compile(t, text+fmt.Sprintf("(sumTCO %d 0)", n))
 	vm := NewVM(vmCode)
-	require.Error(t, vm.Execute())
+	require.NoError(t, vm.Execute())
+	require.Equal(t, expected, vm.Result())
+	require.Less(t, len(vm.stack), 100)
+
+	vmCode = compile(t, text+fmt.Sprintf("(sumNoTCO %d)", n))
+	vm = NewVM(vmCode)
+	require.NoError(t, vm.Execute())
+	require.Equal(t, expected, vm.Result())
+	require.Greater(t, len(vm.stack), 1000)
 }
 
 func TestEnvVariables(t *testing.T) {
