@@ -1,6 +1,7 @@
 package tlvm
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -810,7 +811,7 @@ func emitMacroExpand(v *cons, cur *VMByteCode) {
 
 	cur.debug("code for macro expand len=%d:\n%v", len(vmToProduceArgument.code), macrosCodeString(vmToProduceArgument))
 
-	if err := vmToProduceArgument.Execute(); err != nil {
+	if err := vmToProduceArgument.Execute(context.Background()); err != nil {
 		errorx.Panic(err)
 	}
 
@@ -860,7 +861,7 @@ func expandMacros(v *cons, cur *VMByteCode) any {
 
 	cur.debug("code macros len=%d:\n%v", len(vm.code), macrosCodeString(vm))
 
-	if err := vm.Execute(); err != nil {
+	if err := vm.Execute(context.Background()); err != nil {
 		errorx.Panic(err)
 	}
 

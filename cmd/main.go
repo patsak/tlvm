@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -34,7 +35,7 @@ func main() {
 	}
 
 	vm := tlvm.NewVM(bt)
-	if err := vm.Execute(); err != nil {
+	if err := vm.Execute(context.Background()); err != nil {
 		errorx.Panic(err)
 	}
 

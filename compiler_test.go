@@ -1,6 +1,7 @@
 package tlvm
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"regexp"
@@ -536,7 +537,7 @@ s
 
 			vm := NewVM(vmCode)
 			fmt.Printf("%s\n", vm.CodeString())
-			err = vm.Execute()
+			err = vm.Execute(context.Background())
 			if tc.wantErr {
 				require.Error(t, err, tc.code)
 				return
@@ -568,7 +569,7 @@ func TestErrorLine(t *testing.T) {
 `
 	vmCode := compile(t, text)
 	vm := NewVM(vmCode)
-	err := vm.Execute()
+	err := vm.Execute(context.Background())
 	require.Error(t, err)
 	require.Equal(t, `common.illegal_state: reflect.Set: value of type string is not assignable to type int64
 line 8: (setq p.X ^l)`, FormatErrorWithTextPosition(err, text))
@@ -591,13 +592,13 @@ func TestTailCallOptimizationLargeN(t *testing.T) {
 	expected := int64(n*(n+1)) / 2
 	vmCode := compile(t, text+fmt.Sprintf("(sumTCO %d 0)", n))
 	vm := NewVM(vmCode)
-	require.NoError(t, vm.Execute())
+	require.NoError(t, vm.Execute(context.Background()))
 	require.Equal(t, expected, vm.Result())
 	require.Less(t, len(vm.stack), 100)
 
 	vmCode = compile(t, text+fmt.Sprintf("(sumNoTCO %d)", n))
 	vm = NewVM(vmCode)
-	require.NoError(t, vm.Execute())
+	require.NoError(t, vm.Execute(context.Background()))
 	require.Equal(t, expected, vm.Result())
 	require.Greater(t, len(vm.stack), 1000)
 }
@@ -606,14 +607,14 @@ func TestEnvVariables(t *testing.T) {
 	t.Run("SimpleVariable", func(t *testing.T) {
 		vm := NewVM(compile(t, "(+ n 1)", EnvVariables("n")))
 		vm.EnvInt64("n", 1)
-		require.NoError(t, vm.Execute())
+		require.NoError(t, vm.Execute(context.Background()))
 		require.EqualValues(t, 2, vm.Result())
 	})
 
 	t.Run("String", func(t *testing.T) {
 		vm := NewVM(compile(t, "(eq foo \"bar\")", EnvVariables("foo")))
 		vm.Env("foo", "bar")
-		require.NoError(t, vm.Execute())
+		require.NoError(t, vm.Execute(context.Background()))
 		require.Equal(t, true, vm.Result())
 	})
 
@@ -623,7 +624,7 @@ func TestEnvVariables(t *testing.T) {
 		}
 		vm := NewVM(compile(t, "(+ n.C 1)", EnvVariables("n")))
 		vm.Env("n", input{C: 3})
-		require.NoError(t, vm.Execute())
+		require.NoError(t, vm.Execute(context.Background()))
 		require.EqualValues(t, 4, vm.Result())
 	})
 
@@ -634,7 +635,7 @@ func TestEnvVariables(t *testing.T) {
 		v := input{C: 3}
 		vm := NewVM(compile(t, "(setq n.C (+ n.C 1))", EnvVariables("n")))
 		vm.Env("n", &v)
-		require.NoError(t, vm.Execute())
+		require.NoError(t, vm.Execute(context.Background()))
 		require.EqualValues(t, 4, vm.Result().(int64))
 		require.EqualValues(t, 4, v.C)
 	})
@@ -709,7 +710,7 @@ c
 			vmCode, err := Compile(stdMacroses+tc.code, tc.options...)
 			require.NoError(t, err)
 			vm := NewVM(vmCode)
-			require.NoError(t, vm.Execute(), tc.code)
+			require.NoError(t, vm.Execute(context.Background()), tc.code)
 			switch vm.Result().(type) {
 			case *cons:
 				require.EqualValues(t, tc.result, fmt.Sprintf("%s", vm.Result()), "unexpected result for code: \n%s", vm.CodeString())
@@ -816,7 +817,7 @@ func TestSmoke(t *testing.T) {
 	require.NoError(t, err)
 
 	vm := NewVM(vmCode)
-	require.NoError(t, vm.Execute())
+	require.NoError(t, vm.Execute(context.Background()))
 	require.EqualValues(t, 54, vm.Result())
 }
 
@@ -844,7 +845,7 @@ func compile(t *testing.T, text string, opts ...CompileOption) *VMByteCode {
 func run(t *testing.T, code *VMByteCode) string {
 	vm := NewVM(code)
 	fmt.Printf("%s\n", vm.CodeString())
-	require.NoError(t, vm.Execute())
+	require.NoError(t, vm.Execute(context.Background()))
 	return fmt.Sprintf("%v", vm.Result())
 }
 

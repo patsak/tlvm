@@ -2,12 +2,15 @@ package tlvm
 
 import (
 	cmpf "cmp"
+	"context"
 	"fmt"
 	"reflect"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/joomcode/errorx"
 	"golang.org/x/exp/constraints"
@@ -89,7 +92,25 @@ type VM struct {
 	debugInfo                   map[int]string // debug string by instruction position
 	originalTextPositionPointer map[int]int    // position in original code text by instruction position
 	labels                      map[Label]*closure
+	interrupt                   interruptCode
+
+	timeout time.Duration
 }
+
+func (vm *VM) WithTimeout(timeout time.Duration) *VM {
+	res := *vm
+	res.timeout = timeout
+	return &res
+}
+
+type interruptCode int32
+
+const (
+	interruptCodeNone    interruptCode = 0
+	interruptCodeTimeout               = 1
+	interruptCodeStop                  = 2
+	interruptCodeContext               = 3
+)
 
 type Label string
 
@@ -125,6 +146,7 @@ func NewVM(output *VMByteCode) *VM {
 	vm.labels = output.labels
 	vm.debugInfo = output.debugInfo
 	vm.originalTextPositionPointer = output.origTextPositionPointer
+
 	return vm
 }
 
@@ -303,11 +325,14 @@ func (v *VM) Reset() {
 	v.ip = v.ep
 	v.bp = v.cp + 1
 	v.sp = v.cp
+	v.interrupt = interruptCodeNone
 }
 
-func (v *VM) Execute() (errRes error) {
+func (v *VM) Execute(ctx context.Context) (errRes error) {
+	ctx, cancel := context.WithCancel(ctx)
 	defer func() {
 		rec := recover()
+		cancel()
 		if rec == nil {
 			return
 		}
@@ -318,7 +343,6 @@ func (v *VM) Execute() (errRes error) {
 		}
 
 		errRes = err
-
 		errx := errorx.Cast(err)
 		if errx == nil {
 			return
@@ -327,7 +351,24 @@ func (v *VM) Execute() (errRes error) {
 		errRes = errx.WithProperty(errRawTextPositionProperty, v.getTextPositionByCodePointer())
 	}()
 
+	go func() {
+		var timeTick <-chan time.Time
+		if v.timeout > 0 {
+			t := time.NewTimer(v.timeout)
+			timeTick = t.C
+		}
+		select {
+		case <-ctx.Done():
+			atomic.CompareAndSwapInt32((*int32)(&v.interrupt), int32(interruptCodeNone), interruptCodeContext)
+		case <-timeTick:
+			atomic.CompareAndSwapInt32((*int32)(&v.interrupt), int32(interruptCodeNone), interruptCodeTimeout)
+		}
+	}()
+
 	for v.ip < len(v.code) {
+		if v.interrupt != interruptCodeNone {
+			break
+		}
 		o := v.code[v.ip]
 		v.ip++
 		switch opCode(o) {
@@ -727,12 +768,24 @@ func (v *VM) Execute() (errRes error) {
 		}
 	}
 
-	return nil
+	switch v.interrupt {
+	case interruptCodeTimeout:
+		return errorx.Interrupted.New("interrupted by timeout after %s", v.timeout)
+	case interruptCodeStop:
+		return errorx.Interrupted.New("interrupted by stop")
+	case interruptCodeContext:
+		return errorx.Interrupted.New("interrupted by context")
+	default:
+		return nil
+	}
+}
+
+func (v *VM) Stop() {
+	atomic.CompareAndSwapInt32((*int32)(&v.interrupt), 0, interruptCodeStop)
 }
 
 // popConsPtr pops the top of the stack as a *cons. It returns nil for an
-// invalid stackValue (no value) or for a stored nil pointer, instead of
-// panicking in UnsafePointer / value-receiver dereferencing.
+// invalid stackValue (no value) or for a stored nil pointer
 func popConsPtr(v *VM) *cons {
 	rv := v.pop()
 	if !rv.IsValid() {
