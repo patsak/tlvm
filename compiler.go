@@ -245,7 +245,7 @@ func (c *VMByteCode) inNewScope(typ scopeType, f func()) {
 }
 
 func (c *VMByteCode) debug(msg string, args ...any) {
-	if c.enableDebugInfo {
+	if !c.enableDebugInfo {
 		return
 	}
 	c.debugInfo[len(c.definedFunctions)+int(c.pos())] = fmt.Sprintf(msg, args...)
@@ -533,22 +533,12 @@ func emitFunction(name Label, expr SExpressions, cur *VMByteCode) *closure {
 	}
 	cur.storeFunction(name, &fn)
 
-	args := consToList(expr.head().(*cons))
-	var restArg bool
+	argHead := expr.head().(*cons)
+	args := consToList(argHead)
+	actualArgs, restArg := parseArgList(args, argHead.pos)
 
-	var actualArgs SExpressions
-	for i, a := range args {
-		v := a.(literal).value
-		if v == keywordRest {
-			restArg = true
-			actualArgs = append(actualArgs, args[i+1])
-			break
-		}
-		actualArgs = append(actualArgs, args[i])
-	}
-
-	for i, a := range actualArgs {
-		v := a.(literal).value
+	for i, actualArg := range actualArgs {
+		v := actualArg.(literal).value
 		cur.scope.storeAddr(v, offsetAddress(-(len(actualArgs) - i - 1))) // grow to stack bottom from base pointer
 	}
 
@@ -562,6 +552,35 @@ func emitFunction(name Label, expr SExpressions, cur *VMByteCode) *closure {
 	emitReturn(fn, cur)
 
 	return &fn
+}
+
+// parseArgList parses a function / macro argument list, handling the `&rest`
+// keyword
+func parseArgList(args SExpressions, pos int) (SExpressions, bool) {
+	var (
+		actual  SExpressions
+		restArg bool
+	)
+	for i, arg := range args {
+		v := arg.(literal).value
+		if v == keywordRest {
+			if i+1 >= len(args) {
+				errorx.Panic(errorx.IllegalArgument.
+					New("&rest must be followed by an argument name").
+					WithProperty(errRawTextPositionProperty, pos))
+			}
+			if i+2 < len(args) {
+				errorx.Panic(errorx.IllegalArgument.
+					New("&rest must be followed by exactly one argument name").
+					WithProperty(errRawTextPositionProperty, pos))
+			}
+			restArg = true
+			actual = append(actual, args[i+1])
+			break
+		}
+		actual = append(actual, arg)
+	}
+	return actual, restArg
 }
 
 func emitContains(v SExpressions, cur *VMByteCode) {
@@ -730,35 +749,52 @@ func emitList(sexp SExpressions, cur *VMByteCode) {
 func emitDoList(v *cons, cur *VMByteCode) {
 	l := consToList(v).tail()
 	loopParams := consToList(l.head().(*cons))
-	loopVar := loopParams[0]
+	loopVar := loopParams[0].(literal).value
 	inputList := loopParams[1]
 	body := l.tail()
 
 	cur.inNewScope(scopeTypeLexical, func() {
+		// Lay out two stack slots: an internal `cursor` (the current cdr being
+		// iterated) and the user-visible `loopVar` (the head of the cursor).
 		emit(inputList, cur)
+		cursor := cur.scope.createNextAddr("__dolist_cursor_"+cur.newLabelID(), valTypeLocal)
 
-		ad := cur.scope.createNextAddr(loopVar.(literal).value, valTypeLocal)
+		// Initialise the loopVar slot to nil so the addressOffset matches sp.
+		cur.writeOpCode(opPush).writePointer(cur.getOrCreateGlobalAddressFor(stackValue{}))
+		loop := cur.scope.createNextAddr(loopVar, valTypeLocal)
 
-		var begin ptr
+		var begin, end ptr
 		cur.iptr(&begin)
-		cur.writeOpCode(opPush).writePointer(ad.ptr)
+		cur.writeOpCode(opPush).writePointer(cursor.ptr)
 		cur.writeOpCode(opNil)
 		cur.writeOpCode(opNot)
-		var end ptr
 		cur.writeOpCode(opBr).iptr(&end).writeEmptyAddress()
-		cur.writeOpCode(opPush).writePointer(ad.ptr)
-		cur.writeOpCode(opPush).writePointer(ad.ptr)
+
+		// loopVar = (car cursor)
+		cur.writeOpCode(opPush).writePointer(cursor.ptr)
 		cur.writeOpCode(opCar)
-		cur.writeOpCode(opStore).writePointer(ad.ptr)
+		cur.writeOpCode(opStore).writePointer(loop.ptr)
+
+		// cursor = (cdr cursor)
+		cur.writeOpCode(opPush).writePointer(cursor.ptr)
+		cur.writeOpCode(opCdr)
+		cur.writeOpCode(opStore).writePointer(cursor.ptr)
 
 		for _, e := range body {
 			emit(e, cur)
+			// Each top-level body expression leaves +1 on the stack; drop it
+			cur.writeOpCode(opPop)
 		}
-		cur.writeOpCode(opPop)
-		cur.writeOpCode(opCdr)
-		cur.writeOpCode(opStore).writePointer(ad.ptr)
 		cur.writeOpCode(opJmp).writePointer(begin)
 		cur.modify(end, cur.pos())
+
+		// dolist as an expression must leave net +1 on the stack relative to
+		// its pre-emit sp. Internally we allocated two slots (cursor +
+		// loopVar); collapse them by writing loopVar's last value over the
+		// cursor slot and popping loopVar.
+		cur.writeOpCode(opPush).writePointer(loop.ptr)
+		cur.writeOpCode(opStore).writePointer(cursor.ptr)
+		cur.writeOpCode(opPop)
 	})
 }
 
@@ -845,17 +881,7 @@ func emitDefineMacros(v *cons, cur *VMByteCode) {
 		cur.code = code
 	}()
 	cur.inNewScope(scopeTypeLexical, func() {
-		var restArg bool
-		var actualArgs SExpressions
-		for i, a := range args {
-			v := a.(literal).value
-			if v == keywordRest {
-				restArg = true
-				actualArgs = append(actualArgs, args[i+1])
-				break
-			}
-			actualArgs = append(actualArgs, args[i])
-		}
+		actualArgs, restArg := parseArgList(args, l[1].(*cons).pos)
 
 		for i, a := range actualArgs {
 			v := a.(literal).value
@@ -941,7 +967,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 		}
 
 		sort.Slice(localAddresses, func(i, j int) bool {
-			return localAddresses[i].closurePtr <= localAddresses[j].closurePtr
+			return localAddresses[i].closurePtr < localAddresses[j].closurePtr
 		})
 
 		// write closure variables count
@@ -1166,23 +1192,6 @@ func (c *addressScope) getBoundVariables() []boundVariable {
 	return res
 }
 
-func (c *scope) parentFrame() *scope {
-	res := c.parentScope
-	for {
-		if res != nil && res.scopeType == scopeTypeStackFrame {
-			return res
-		}
-		if res == nil {
-			return nil
-		}
-		res = res.parentScope
-	}
-}
-
-func (c *scope) isRoot() bool {
-	return c.parentFrame() == nil
-}
-
 func (c *scope) storeAddr(v any, pos ptr) {
 	c.variablePointer[v] = ptrAndType{pos, valTypeLocal}
 }
@@ -1229,9 +1238,12 @@ func (c *scope) resolveAddress(v any) (ptrAndType, bool) {
 		if s.parentScope != nil {
 			res, ok := findAddr(s.parentScope)
 
-			if ok && res.tp == valTypeClosure && s.scopeType == scopeTypeStackFrame { // bound variable in parent stack frames
-				if localAddress, ok := s.boundFrameAddress(v); !ok {
-					s.createNextAddr(v, localAddress.tp)
+			// If an inner stack frame captures a variable defined in a frame
+			// further out, every intermediate stack frame must also create its
+			// own closure binding so the variable is threaded down by name.
+			if ok && res.tp == valTypeClosure && s.scopeType == scopeTypeStackFrame {
+				if _, alreadyBound := s.boundFrameAddress(v); !alreadyBound {
+					s.createNextAddr(v, valTypeClosure)
 				}
 			}
 			return res, ok
@@ -1316,7 +1328,7 @@ func readPtr(addr []byte) ptr {
 }
 
 func macrosCodeString(vm *VM) LazyString {
-	return LazyString(func() string {
+	return func() string {
 		orig := vm.CodeString()
 		splitted := strings.Split(orig, "\n")
 
@@ -1327,5 +1339,5 @@ func macrosCodeString(vm *VM) LazyString {
 		}
 		out = append(out, "  --- macros end ---")
 		return strings.Join(out, "\n")
-	})
+	}
 }

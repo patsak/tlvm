@@ -34,10 +34,6 @@ func (l literal) String() string {
 	return string(l.value)
 }
 
-func (l literal) valueAndPosition() (any, int) {
-	return l.value, l.pos
-}
-
 type str struct {
 	value string
 	pos   int
@@ -101,12 +97,13 @@ func (c *cons) first() any {
 	return c.expr[len(c.expr)-1]
 }
 
-func (c cons) tail() *cons {
-	if len(c.expr) < 2 {
+func (c *cons) tail() *cons {
+	if c == nil || len(c.expr) < 2 {
 		return nil
 	}
-	c.expr = c.expr[:len(c.expr)-1]
-	return &c
+	cp := *c
+	cp.expr = cp.expr[:len(cp.expr)-1]
+	return &cp
 }
 
 func (c *cons) concat(e any) {
@@ -129,10 +126,6 @@ func (c *consBuilder) build(pos int) *cons {
 	v := &cons{expr: c.expr, pos: pos}
 	slices.Reverse(v.expr)
 	return v
-}
-
-func (l *cons) valueAndPosition() (any, int) {
-	return l, l.pos
 }
 
 func (c *cons) String() string {

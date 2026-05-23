@@ -277,14 +277,27 @@ func (vm *VM) Env(k Label, v any) {
 }
 
 func (vm *VM) EnvString(k string, v string) {
-	vm.stack[vm.env[Label(k)]] = stackValueFrom(v)
+	vm.Env(Label(k), v)
 }
 
 func (v *VM) Result() any {
-	return v.stack[v.sp].Interface()
+	rv := v.stack[v.sp]
+	if !rv.IsValid() {
+		return nil
+	}
+	return rv.Interface()
 }
 
 func (v *VM) Reset() {
+	// Clear stack slots above the constant pool so previous runs don't leak
+	// reflect.Value entries as GC roots or accidentally satisfy stale reads.
+	var zero stackValue
+	for i := v.cp + 1; i < len(v.stack); i++ {
+		if !v.stack[i].IsValid() {
+			break
+		}
+		v.stack[i] = zero
+	}
 	v.ip = v.ep
 	v.bp = v.cp + 1
 	v.sp = v.cp
@@ -460,7 +473,21 @@ func (v *VM) Execute() (errRes error) {
 				v.push(stackValueFrom(v1))
 			}
 		case opNil:
-			v.push(stackValueFrom(v.pop().IsNil()))
+			rv := v.pop()
+			var isNil bool
+			switch {
+			case !rv.IsValid():
+				isNil = true
+			case rv.Kind() == reflect.Ptr && rv.IsNil():
+				isNil = true
+			case rv.Type() == consType:
+				// empty cons counts as nil for list iteration purposes.
+				c := (*cons)(rv.UnsafePointer())
+				isNil = c == nil || len(c.expr) == 0
+			default:
+				isNil = rv.IsNil()
+			}
+			v.push(stackValueFrom(isNil))
 		case opBr:
 			condition := v.pop().Bool()
 			addr := v.readPtr()
@@ -582,31 +609,25 @@ func (v *VM) Execute() (errRes error) {
 
 			v.push(stackValueFrom(res))
 		case opCar:
-			c := (*cons)(v.pop().UnsafePointer())
+			c := popConsPtr(v)
 			v.push(stackValueFrom(c.first()))
 		case opCdr:
-			c := (*cons)(v.pop().UnsafePointer())
+			c := popConsPtr(v)
 			v.push(stackValueFrom(c.tail()))
 		case opSplice:
-			nextV := v.pop()
-			prevV := v.pop()
+			next := popConsPtr(v)
+			prev := popConsPtr(v)
 
-			if !prevV.IsValid() {
-				v.push(nextV)
-				break
+			switch {
+			case prev == nil && next == nil:
+				v.push(stackValue{})
+			case prev == nil:
+				v.push(stackValueFrom(next))
+			case next == nil:
+				v.push(stackValueFrom(prev))
+			default:
+				v.push(stackValueFrom(&cons{expr: append(prev.expr, next.expr...)}))
 			}
-			if !nextV.IsValid() {
-				v.push(prevV)
-				break
-			}
-
-			next := (*cons)(nextV.UnsafePointer())
-			prev := (*cons)(prevV.UnsafePointer())
-
-			b := &cons{}
-			b.expr = append(prev.expr, next.expr...)
-
-			v.push(stackValueFrom(b))
 		case opMakeHashTable:
 			v.push(stackValueFrom(make(map[any]any)))
 		case opSetHashTableValue:
@@ -660,15 +681,17 @@ func (v *VM) Execute() (errRes error) {
 		case opLen:
 			var l int
 			vv := v.pop()
-			switch vv.Kind() {
-			case reflect.Slice, reflect.Map, reflect.String:
+			switch {
+			case !vv.IsValid():
+				l = 0 // nil / empty list
+			case vv.Kind() == reflect.Slice, vv.Kind() == reflect.Map, vv.Kind() == reflect.String:
 				l = vv.Len()
-			default:
-				if vv.Type() == consType {
-					l = len((*cons)(vv.UnsafePointer()).expr)
-				} else {
-					panic(errorx.Panic(errorx.IllegalArgument.New("can't get length from type %+v", vv.Type())))
+			case vv.Type() == consType:
+				if c := (*cons)(vv.UnsafePointer()); c != nil {
+					l = len(c.expr)
 				}
+			default:
+				errorx.Panic(errorx.IllegalArgument.New("can't get length from type %+v", vv.Type()))
 			}
 			v.push(stackValueFrom(l))
 		case opContains:
@@ -702,6 +725,20 @@ func (v *VM) Execute() (errRes error) {
 	}
 
 	return nil
+}
+
+// popConsPtr pops the top of the stack as a *cons. It returns nil for an
+// invalid stackValue (no value) or for a stored nil pointer, instead of
+// panicking in UnsafePointer / value-receiver dereferencing.
+func popConsPtr(v *VM) *cons {
+	rv := v.pop()
+	if !rv.IsValid() {
+		return nil
+	}
+	if rv.Kind() == reflect.Ptr && rv.IsNil() {
+		return nil
+	}
+	return (*cons)(rv.UnsafePointer())
 }
 
 func (v *VM) pushRestArgIfNeeded(nargs int, cl *closure) {
@@ -810,10 +847,6 @@ func (v *VM) pop() stackValue {
 	ret := v.stack[v.sp]
 	v.sp--
 	return ret
-}
-
-func (v *VM) peek() any {
-	return v.stack[v.sp]
 }
 
 func (v *VM) push(rv stackValue) {

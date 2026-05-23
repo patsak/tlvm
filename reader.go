@@ -87,7 +87,7 @@ func tokenize(text string) ([]token, error) {
 		switch {
 		case unicode.IsSpace(r):
 			continue
-		case r == ',' && i < len(runes) && runes[i+1] == '@':
+		case r == ',' && i+1 < len(runes) && runes[i+1] == '@':
 			t = token{string(runes[i : i+2]), i}
 			i++
 		case r == ')', r == '(', r == '\'', r == '`', r == ',':
@@ -133,11 +133,13 @@ func isLiteral(rn rune) bool {
 func validateBrackets(text string) error {
 	balance := 0
 	lastBalancePosition := 0
-	for i, r := range []rune(text) {
-		if r == '(' {
+	// Iterate over bytes — not rune indexes — so error positions match
+	// the byte offsets used everywhere else in the reader / error reporter.
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '(':
 			balance++
-		}
-		if r == ')' {
+		case ')':
 			balance--
 		}
 		if balance < 0 {
