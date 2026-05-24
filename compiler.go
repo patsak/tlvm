@@ -5,6 +5,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"sort"
@@ -27,6 +30,9 @@ type VMByteCode struct {
 	debugInfo               map[int]string
 	origTextPositionPointer map[int]int
 	enableDebugInfo         bool
+
+	globalLoadedLibraries   map[string]bool
+	loadedLibrariesFromRoot []string
 
 	definedFunctions []byte // code section with defined functions
 	code             []byte // result code
@@ -114,6 +120,7 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 		scope:                   newScope(scopeTypeStackFrame, nil),
 		origTextPositionPointer: make(map[int]int),
 		macrosByName:            make(map[Label]macros),
+		globalLoadedLibraries:   make(map[string]bool),
 	}
 	for _, opt := range options {
 		opt(&vmByteCode)
@@ -340,6 +347,8 @@ func emit(node any, cur *VMByteCode) {
 				emitDefineStruct(consToList(v).tail(), cur)
 			case keywordMake:
 				emitMakeStruct(consToList(v).tail(), cur)
+			case keywordRequire:
+				emitRequire(consToList(v).tail(), cur)
 			default:
 				l := consToList(v)
 				if _, ok := cur.macrosByName[l.headLiteralValue()]; ok {
@@ -1102,6 +1111,59 @@ func emitMakeStruct(v SExpressions, cur *VMByteCode) {
 	cur.writeOpCode(opMake).writePointer(structPtr)
 }
 
+func emitRequire(v SExpressions, cur *VMByteCode) {
+	filePath, ok := v[0].(str)
+	if !ok {
+		errorx.Panic(errorx.IllegalArgument.New("require argument must be a string literal").WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
+	}
+
+	absPath, err := filepath.Abs(filePath.value)
+	if err != nil {
+		errorx.Panic(errorx.IllegalArgument.New("cannot resolve absolute path '%s'", filePath.value).
+			WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
+	}
+	alreadyLoaded := cur.globalLoadedLibraries[absPath]
+	if alreadyLoaded {
+		return
+	}
+
+	isRoot := cur.loadedLibrariesFromRoot == nil
+
+	if isRoot {
+		cur.loadedLibrariesFromRoot = make([]string, 0)
+	}
+
+	if isCycledDependency := slices.Contains(cur.loadedLibrariesFromRoot, absPath); isCycledDependency {
+		errorx.Panic(errorx.IllegalArgument.New("cyclic dependencies: %s",
+			strings.Join(append(cur.loadedLibrariesFromRoot, absPath), "\n")))
+	}
+
+	cur.loadedLibrariesFromRoot = append(cur.loadedLibrariesFromRoot, absPath)
+
+	file, err := os.Open(absPath)
+	defer file.Close()
+	fileContent, err := io.ReadAll(file)
+	if err != nil {
+		errorx.Panic(errorx.IllegalArgument.New("cannot read file '%s'", filePath.value).
+			WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
+	}
+	expressions, err := Read(string(fileContent))
+	if err != nil {
+		errorx.Panic(errorx.IllegalArgument.New("cannot read file '%s'", filePath.value).
+			WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
+	}
+
+	for _, e := range expressions {
+		emit(e, cur)
+	}
+
+	if isRoot {
+		cur.loadedLibrariesFromRoot = nil
+	}
+
+	cur.globalLoadedLibraries[absPath] = true
+}
+
 func emitLiteral(literal literal, cur *VMByteCode) ptrAndType {
 	valuePath := variablePath(literal.value)
 	addr, ok := cur.scope.resolveAddress(valuePath.VariableName())
@@ -1274,7 +1336,7 @@ func wrapErrorWithTextPosition(err error, rawText string) error {
 		ok  bool
 		pos any
 	)
-
+	origErr := err
 	for {
 		pos, ok = errorx.ExtractProperty(err, errRawTextPositionProperty)
 		if ok {
@@ -1288,7 +1350,7 @@ func wrapErrorWithTextPosition(err error, rawText string) error {
 	}
 
 	if !ok {
-		return err
+		return origErr
 	}
 	posInt := pos.(int)
 
@@ -1297,7 +1359,7 @@ func wrapErrorWithTextPosition(err error, rawText string) error {
 		return err
 	}
 
-	return errorx.Decorate(err, "Code: %s", errorLine)
+	return errorx.Decorate(origErr, "Code: %s", errorLine)
 }
 
 func matchMacroSpecialSymbol(input any, symbol string) (any, bool) {

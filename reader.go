@@ -47,6 +47,7 @@ const (
 	keywordContains      = "contains"
 	keywordDefstruct     = "defstruct"
 	keywordMake          = "make"
+	keywordRequire       = "require"
 )
 
 func Read(sourceCode string) (SExpressions, error) {

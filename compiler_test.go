@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"regexp"
 	"testing"
 
@@ -553,6 +554,51 @@ s
 			}
 		})
 	}
+}
+
+func TestRequire(t *testing.T) {
+	aLib, err := os.CreateTemp("/tmp/", "*.tl")
+	require.NoError(t, err)
+	defer os.Remove(aLib.Name())
+	_, err = aLib.WriteString(`(defun f () 42)`)
+	require.NoError(t, err)
+	require.NoError(t, aLib.Close())
+
+	bLib, err := os.CreateTemp("/tmp/", "*.tl")
+	require.NoError(t, err)
+	defer os.Remove(bLib.Name())
+	cLib, err := os.CreateTemp("/tmp/", "*.tl")
+	require.NoError(t, err)
+	defer os.Remove(cLib.Name())
+	_, err = bLib.WriteString(fmt.Sprintf(`(require "%s") (defun g () (+ (f) 8))`, cLib.Name()))
+	_, err = cLib.WriteString(fmt.Sprintf(`(require "%s")`, bLib.Name()))
+
+	t.Run("Success", func(t *testing.T) {
+		text := fmt.Sprintf(`
+(require "%s")
+(+ (f) 8)
+`, aLib.Name())
+		require.Equal(t, "50", compileAndRun(t, text))
+	})
+
+	t.Run("DoubleImport", func(t *testing.T) {
+		text := fmt.Sprintf(`
+(require "%s")
+(require "%s")
+(+ (f) 8)
+`, aLib.Name(), aLib.Name())
+		require.Equal(t, "50", compileAndRun(t, text))
+	})
+
+	t.Run("Cycle", func(t *testing.T) {
+		text := fmt.Sprintf(`
+(require "%s")
+(+ (g) 8)
+`, bLib.Name())
+		_, err := Compile(text)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cyclic dependencies")
+	})
 }
 
 func TestErrorLine(t *testing.T) {
