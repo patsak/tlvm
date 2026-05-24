@@ -94,7 +94,8 @@ type VM struct {
 	labels                      map[Label]*closure
 	interrupt                   interruptCode
 
-	timeout time.Duration
+	timeout           time.Duration
+	maxStackSizeBytes uint64
 }
 
 func (vm *VM) WithTimeout(timeout time.Duration) *VM {
@@ -103,13 +104,20 @@ func (vm *VM) WithTimeout(timeout time.Duration) *VM {
 	return &res
 }
 
+func (vm *VM) WithMaxStackSize(sizeInBytes uint64) *VM {
+	res := *vm
+	res.maxStackSizeBytes = sizeInBytes
+	return &res
+}
+
 type interruptCode int32
 
 const (
-	interruptCodeNone    interruptCode = 0
-	interruptCodeTimeout               = 1
-	interruptCodeStop                  = 2
-	interruptCodeContext               = 3
+	interruptCodeNone      interruptCode = 0
+	interruptCodeTimeout                 = 1
+	interruptCodeStop                    = 2
+	interruptCodeContext                 = 3
+	interruptStackOverflow               = 4
 )
 
 type Label string
@@ -124,13 +132,18 @@ func (l StructLabel) String() string {
 	return string(l)
 }
 
-const callFrameOffset = 4
+const (
+	callFrameOffset = 4
+
+	defaultMaxStackSize = 1 << 16
+)
 
 func NewVM(output *VMByteCode) *VM {
 	vm := &VM{
-		code: append(output.definedFunctions, output.code...),
-		bp:   -1,
-		sp:   -1,
+		code:              append(output.definedFunctions, output.code...),
+		bp:                -1,
+		sp:                -1,
+		maxStackSizeBytes: defaultMaxStackSize,
 	}
 	for i := range output.globalsList {
 		vm.growStack(i)
@@ -768,16 +781,30 @@ func (v *VM) Execute(ctx context.Context) (errRes error) {
 		}
 	}
 
+	if err := v.interruptError(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (v *VM) interruptError() error {
+	var msg string
 	switch v.interrupt {
 	case interruptCodeTimeout:
-		return errorx.Interrupted.New("interrupted by timeout after %s", v.timeout)
+		msg = fmt.Sprintf("interrupted by timeout after %s", v.timeout)
 	case interruptCodeStop:
-		return errorx.Interrupted.New("interrupted by stop")
+		msg = "interrupted by stop"
 	case interruptCodeContext:
-		return errorx.Interrupted.New("interrupted by context")
+		msg = "interrupted by context"
+	case interruptStackOverflow:
+		msg = "interrupted by stack overflow"
+
 	default:
 		return nil
 	}
+	err := errorx.Interrupted.New(string(msg), "")
+	return err.WithProperty(errRawTextPositionProperty, v.getTextPositionByCodePointer())
 }
 
 func (v *VM) Stop() {
@@ -933,6 +960,10 @@ func (v *VM) growStack(p int) {
 	newArray := make([]stackValue, n)
 	copy(newArray, v.stack)
 	v.stack = newArray
+
+	if uint64(p) > v.maxStackSizeBytes {
+		atomic.CompareAndSwapInt32((*int32)(&v.interrupt), int32(interruptCodeNone), interruptStackOverflow)
+	}
 }
 
 func (v *VM) getTextPositionByCodePointer() int {

@@ -696,6 +696,20 @@ func TestInterrupt(t *testing.T) {
 		require.Contains(t, err.Error(), "interrupted by stop")
 	})
 
+	t.Run("StackOverflow", func(t *testing.T) {
+		stackOverflowCode := `
+(defun sum (n)
+	(+ 1 (sum (+ n 1))))
+(sum 0)
+`
+		local, err := Build(stackOverflowCode)
+		require.NoError(t, err)
+		local = local.WithMaxStackSize(200)
+		err = local.Execute(context.Background())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "interrupted by stack overflow")
+	})
+
 }
 
 // -----------------------------------------------------------------------------
