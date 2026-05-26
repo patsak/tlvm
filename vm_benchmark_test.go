@@ -19,7 +19,7 @@ func BenchmarkVM(b *testing.B) {
 (fact 15)
 `
 
-	bin, err := Compile(code)
+	bin, err := Compile(context.Background(), code)
 	require.NoError(b, err)
 
 	vm := NewVM(bin)
@@ -41,7 +41,7 @@ func BenchmarkVM(b *testing.B) {
 	(or (eq Adults 1) (gte Value 100))
 )
 `
-		bin, err := Compile(code, EnvVariables("Origin", "Country", "Value", "Adults"))
+		bin, err := Compile(context.Background(), code, EnvVariables("Origin", "Country", "Value", "Adults"))
 		require.NoError(b, err)
 
 		vm := NewVM(bin)
@@ -78,7 +78,7 @@ func BenchmarkVM(b *testing.B) {
 	})
 
 	b.Run("ConcatVM", func(b *testing.B) {
-		bin, err := Compile(`(+ "a" "b")`)
+		bin, err := Compile(context.Background(), `(+ "a" "b")`)
 		require.NoError(b, err)
 		vm := NewVM(bin)
 		b.ReportAllocs()

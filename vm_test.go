@@ -15,13 +15,13 @@ import (
 
 func TestBuild(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
-		vm, err := Build("(+ 1 2)")
+		vm, err := Build(context.Background(), "(+ 1 2)")
 		require.NoError(t, err)
 		require.NoError(t, vm.Execute(context.Background()))
 		require.EqualValues(t, 3, vm.Result())
 	})
 	t.Run("CompileError", func(t *testing.T) {
-		_, err := Build("(setq")
+		_, err := Build(context.Background(), "(setq")
 		require.Error(t, err)
 	})
 }
@@ -134,7 +134,7 @@ func TestCodeStringCoversAllEmittedOpcodes(t *testing.T) {
 (setq p.X 1)
 p.X
 `
-	bin, err := Compile(code)
+	bin, err := Compile(context.Background(), code)
 	require.NoError(t, err)
 	vm := NewVM(bin)
 	dump := vm.CodeString()
@@ -167,7 +167,7 @@ func TestExtFunctions_ValidationErrors(t *testing.T) {
 			"double": func(x int64) int64 { return x * 2 },
 		})
 		require.NoError(t, err)
-		vm, err := Build(`(double 21)`, opt)
+		vm, err := Build(context.Background(), `(double 21)`, opt)
 		require.NoError(t, err)
 		require.NoError(t, vm.Execute(context.Background()))
 		require.EqualValues(t, 42, vm.Result())
@@ -186,23 +186,23 @@ func TestExtFunctionsOrPanic_Panics(t *testing.T) {
 
 func TestDefstruct_Validation(t *testing.T) {
 	t.Run("LowercaseFieldName", func(t *testing.T) {
-		_, err := Compile(`(defstruct p (x :type int))`)
+		_, err := Compile(context.Background(), `(defstruct p (x :type int))`)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "uppercase")
 	})
 
 	t.Run("UnknownFieldAttr", func(t *testing.T) {
-		_, err := Compile(`(defstruct p (X :foo bar))`)
+		_, err := Compile(context.Background(), `(defstruct p (X :foo bar))`)
 		require.Error(t, err)
 	})
 
 	t.Run("UnknownTypeAttr", func(t *testing.T) {
-		_, err := Compile(`(defstruct p (X :type blob))`)
+		_, err := Compile(context.Background(), `(defstruct p (X :type blob))`)
 		require.Error(t, err)
 	})
 
 	t.Run("MakeUnknownStruct", func(t *testing.T) {
-		_, err := Compile(`(make unknown)`)
+		_, err := Compile(context.Background(), `(make unknown)`)
 		require.Error(t, err)
 	})
 
@@ -227,13 +227,13 @@ r.I
 // -----------------------------------------------------------------------------
 
 func TestCompile_UnknownFunction(t *testing.T) {
-	_, err := Compile(`(no-such-fn 1 2)`)
+	_, err := Compile(context.Background(), `(no-such-fn 1 2)`)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown function")
 }
 
 func TestCompile_UnknownLiteral(t *testing.T) {
-	_, err := Compile(`(+ unknown 1)`)
+	_, err := Compile(context.Background(), `(+ unknown 1)`)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown literal")
 }
@@ -253,14 +253,14 @@ func TestArgCountErrors(t *testing.T) {
 	t.Run("MacroTooFewArgs", func(t *testing.T) {
 		// 'plus' macro requires 3 args; pass 1.
 		src := `(defmacro plus (a b c) ` + "`" + `(+ ,a ,b ,c)) (plus 1)`
-		_, err := Compile(src)
+		_, err := Compile(context.Background(), src)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "must be equal")
 	})
 
 	t.Run("MacroRestNeedsMin", func(t *testing.T) {
 		// forRange requires at least 3 fixed args (i, from, to) before &rest body.
-		_, err := Compile(stdMacroses + `(forRange i 0)`)
+		_, err := Compile(context.Background(), stdMacroses+`(forRange i 0)`)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "must be greater than")
 	})
@@ -268,19 +268,19 @@ func TestArgCountErrors(t *testing.T) {
 	t.Run("DefunRestWithoutName", func(t *testing.T) {
 		// `&rest` not followed by a parameter name used to crash with an
 		// index-out-of-range panic; it must now produce a clear error.
-		_, err := Compile(`(defun f (a &rest) a)`)
+		_, err := Compile(context.Background(), `(defun f (a &rest) a)`)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "&rest")
 	})
 
 	t.Run("LambdaRestWithoutName", func(t *testing.T) {
-		_, err := Compile(`(lambda (&rest) 1)`)
+		_, err := Compile(context.Background(), `(lambda (&rest) 1)`)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "&rest")
 	})
 
 	t.Run("MacroRestWithoutName", func(t *testing.T) {
-		_, err := Compile("(defmacro m (a &rest) `(+ ,a 1))")
+		_, err := Compile(context.Background(), "(defmacro m (a &rest) `(+ ,a 1))")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "&rest")
 	})
@@ -611,11 +611,11 @@ func TestPrint_Compiles(t *testing.T) {
 func TestEnableDebugSymbols(t *testing.T) {
 	src := `(defun f (a) (+ a 1)) (f 1)`
 
-	withDebug, err := Build(src, EnableDebugSymbols())
+	withDebug, err := Build(context.Background(), src, EnableDebugSymbols())
 	require.NoError(t, err)
 	dumpWithDebug := withDebug.CodeString()
 
-	withoutDebug, err := Build(src)
+	withoutDebug, err := Build(context.Background(), src)
 	require.NoError(t, err)
 	dumpWithoutDebug := withoutDebug.CodeString()
 
@@ -651,7 +651,7 @@ func TestExecuteError_HasTextPosition(t *testing.T) {
 	// (+ "a" 1) raises an "unexpected types" panic from opAdd; the deferred
 	// recover should attach text position info.
 	src := `(+ "a" 1)`
-	vm, err := Build(src)
+	vm, err := Build(context.Background(), src)
 	require.NoError(t, err)
 	err = vm.Execute(context.Background())
 	require.Error(t, err)
@@ -664,7 +664,7 @@ func TestInterrupt(t *testing.T) {
 (setq i 0)
 (while (lt i 10) (setq i (- i 1)))
 `
-	vm, err := Build(endlessCode)
+	vm, err := Build(context.Background(), endlessCode)
 	require.NoError(t, err)
 
 	t.Run("Timeout", func(t *testing.T) {
@@ -702,7 +702,7 @@ func TestInterrupt(t *testing.T) {
 	(+ 1 (sum (+ n 1))))
 (sum 0)
 `
-		local, err := Build(stackOverflowCode)
+		local, err := Build(context.Background(), stackOverflowCode)
 		require.NoError(t, err)
 		local = local.WithMaxStackSize(200)
 		err = local.Execute(context.Background())
@@ -718,14 +718,14 @@ func TestInterrupt(t *testing.T) {
 
 func mustBuild(t *testing.T, src string, opts ...CompileOption) *VM {
 	t.Helper()
-	vm, err := Build(src, opts...)
+	vm, err := Build(context.Background(), src, opts...)
 	require.NoError(t, err, "compile failed:\n%s", src)
 	return vm
 }
 
 func newEnvVM(t *testing.T, src string, vars ...Label) *VM {
 	t.Helper()
-	bin, err := Compile(src, EnvVariables(vars...))
+	bin, err := Compile(context.Background(), src, EnvVariables(vars...))
 	require.NoError(t, err)
 	return NewVM(bin)
 }

@@ -25,6 +25,7 @@ type VMByteCode struct {
 	scope                *scope             // current variables scope
 	macrosByName         map[Label]macros
 	externalFunctions    map[Label]stackValue
+	expectedEnvVariables map[Label]struct{}
 	autoIncrementLabelID int
 
 	debugInfo               map[int]string
@@ -36,6 +37,23 @@ type VMByteCode struct {
 
 	definedFunctions []byte // code section with defined functions
 	code             []byte // result code
+}
+
+func (v *VMByteCode) ImportedEnvVariables() []string {
+	res := make([]string, 0, len(v.expectedEnvVariables))
+	for k := range v.expectedEnvVariables {
+		res = append(res, k.String())
+	}
+
+	return res
+}
+
+func (v *VMByteCode) ImportedExternalFunctions() []string {
+	res := make([]string, 0, len(v.externalFunctions))
+	for k := range v.externalFunctions {
+		res = append(res, k.String())
+	}
+	return res
 }
 
 type scopeType int
@@ -83,6 +101,7 @@ func EnvVariables(env ...Label) CompileOption {
 	return func(bt *VMByteCode) {
 		for _, k := range env {
 			bt.getOrCreateGlobalAddressFor(stackValueFrom(k))
+			bt.expectedEnvVariables[k] = struct{}{}
 		}
 	}
 }
@@ -93,7 +112,7 @@ func EnableDebugSymbols() CompileOption {
 	}
 }
 
-func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
+func Compile(ctx context.Context, text string, options ...CompileOption) (_ *VMByteCode, err error) {
 	defer func() {
 		errRec := recover()
 		if errRec == nil {
@@ -121,20 +140,21 @@ func Compile(text string, options ...CompileOption) (_ *VMByteCode, err error) {
 		origTextPositionPointer: make(map[int]int),
 		macrosByName:            make(map[Label]macros),
 		globalLoadedLibraries:   make(map[string]bool),
+		expectedEnvVariables:    make(map[Label]struct{}),
 	}
 	for _, opt := range options {
 		opt(&vmByteCode)
 	}
 
 	for _, e := range expressions {
-		emit(e, &vmByteCode)
+		emit(ctx, e, &vmByteCode)
 	}
 
 	return &vmByteCode, nil
 }
 
-func Build(text string, options ...CompileOption) (*VM, error) {
-	compileResult, err := Compile(text, options...)
+func Build(ctx context.Context, text string, options ...CompileOption) (*VM, error) {
+	compileResult, err := Compile(ctx, text, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +279,7 @@ func (c *VMByteCode) debug(msg string, args ...any) {
 	c.debugInfo[len(c.definedFunctions)+int(c.pos())] = fmt.Sprintf(msg, args...)
 }
 
-func emit(node any, cur *VMByteCode) {
+func emit(ctx context.Context, node any, cur *VMByteCode) {
 	switch v := node.(type) {
 	case *cons:
 		cur.origPos(v.pos)
@@ -267,94 +287,94 @@ func emit(node any, cur *VMByteCode) {
 		case *cons:
 			args := consToList(v.tail())
 			for _, a := range args {
-				emit(a, cur)
+				emit(ctx, a, cur)
 			}
 
-			emit(v.first(), cur)
+			emit(ctx, v.first(), cur)
 			cur.writeOpCode(opPopCall).writeInt(len(args))
 			cur.origPos(v.pos)
 		case literal:
 			switch first.value {
 			case keywordAnd:
-				emitAnd(v, cur)
+				emitAnd(ctx, v, cur)
 			case keywordOr:
-				emitOr(v, cur)
+				emitOr(ctx, v, cur)
 			case keywordNot:
-				emitNot(v, cur)
+				emitNot(ctx, v, cur)
 			case keywordIf:
-				emitIf(v, cur)
+				emitIf(ctx, v, cur)
 			case keywordPlus:
-				emitMultiOp(v, cur, opAdd)
+				emitMultiOp(ctx, v, cur, opAdd)
 			case keywordSub:
-				emitBinaryOp(v, cur, opSub)
+				emitBinaryOp(ctx, v, cur, opSub)
 			case keywordDiv:
-				emitBinaryOp(v, cur, opDiv)
+				emitBinaryOp(ctx, v, cur, opDiv)
 			case keywordMul:
-				emitBinaryOp(v, cur, opMul)
+				emitBinaryOp(ctx, v, cur, opMul)
 			case keywordEq:
-				emitBinaryOp(v, cur, opCmp, cmpFlagEq)
+				emitBinaryOp(ctx, v, cur, opCmp, cmpFlagEq)
 			case keywordLt:
-				emitBinaryOp(v, cur, opCmp, cmpFlagLt)
+				emitBinaryOp(ctx, v, cur, opCmp, cmpFlagLt)
 			case keywordGt:
-				emitBinaryOp(v, cur, opCmp, cmpFlagGt)
+				emitBinaryOp(ctx, v, cur, opCmp, cmpFlagGt)
 			case keywordGte:
-				emitBinaryOp(v, cur, opCmp, cmpFlagGt|cmpFlagEq)
+				emitBinaryOp(ctx, v, cur, opCmp, cmpFlagGt|cmpFlagEq)
 			case keywordLte:
-				emitBinaryOp(v, cur, opCmp, cmpFlagLt|cmpFlagEq)
+				emitBinaryOp(ctx, v, cur, opCmp, cmpFlagLt|cmpFlagEq)
 			case keywordSetq:
-				emitSetq(v, cur)
+				emitSetq(ctx, v, cur)
 			case keywordList:
-				emitList(consToList(v), cur)
+				emitList(ctx, consToList(v), cur)
 			case keywordMakeHashTable:
 				emitMakeHashTable(cur)
 			case keywordSetH:
-				emitSeth(consToList(v).tail(), cur)
+				emitSeth(ctx, consToList(v).tail(), cur)
 			case keywordGetH:
-				emitGeth(consToList(v).tail(), cur)
+				emitGeth(ctx, consToList(v).tail(), cur)
 			case keywordMakeVector:
 				emitMakeVector(cur)
 			case keywordSetV:
-				emitSetv(consToList(v).tail(), cur)
+				emitSetv(ctx, consToList(v).tail(), cur)
 			case keywordGetV:
-				emitGetv(consToList(v).tail(), cur)
+				emitGetv(ctx, consToList(v).tail(), cur)
 			case keywordAppendv:
-				emitAppend(consToList(v).tail(), cur)
+				emitAppend(ctx, consToList(v).tail(), cur)
 			case keywordDoList:
-				emitDoList(v, cur)
+				emitDoList(ctx, v, cur)
 			case keywordDefun:
-				emitDefineFunction(v, cur)
+				emitDefineFunction(ctx, v, cur)
 			case keywordDefmacro:
-				emitDefineMacros(v, cur)
+				emitDefineMacros(ctx, v, cur)
 			case keywordMacroexpand:
-				emitMacroExpand(v, cur)
+				emitMacroExpand(ctx, v, cur)
 			case keywordBacktick:
-				emitBacktick(v.tail().first(), cur)
+				emitBacktick(ctx, v.tail().first(), cur)
 			case keywordQuote:
 				emitQuote(v.tail().first(), cur)
 			case keywordLambda:
-				emitLambda(v, cur)
+				emitLambda(ctx, v, cur)
 			case keywordProgn:
-				emitProgn(v, cur)
+				emitProgn(ctx, v, cur)
 			case keywordPrint:
-				emitPrint(v, cur)
+				emitPrint(ctx, v, cur)
 			case keywordWhile:
-				emitWhile(v, cur)
+				emitWhile(ctx, v, cur)
 			case keywordLen:
-				emitLen(consToList(v).tail(), cur)
+				emitLen(ctx, consToList(v).tail(), cur)
 			case keywordContains:
-				emitContains(consToList(v).tail(), cur)
+				emitContains(ctx, consToList(v).tail(), cur)
 			case keywordDefstruct:
 				emitDefineStruct(consToList(v).tail(), cur)
 			case keywordMake:
 				emitMakeStruct(consToList(v).tail(), cur)
 			case keywordRequire:
-				emitRequire(consToList(v).tail(), cur)
+				emitRequire(ctx, consToList(v).tail(), cur)
 			default:
 				l := consToList(v)
 				if _, ok := cur.macrosByName[l.headLiteralValue()]; ok {
-					emitCallMacro(v, cur)
+					emitCallMacro(ctx, v, cur)
 				} else {
-					emitCallFunction(v, cur)
+					emitCallFunction(ctx, v, cur)
 				}
 			}
 			cur.origPos(v.pos)
@@ -377,21 +397,21 @@ func emit(node any, cur *VMByteCode) {
 	}
 }
 
-func emitLen(sexp SExpressions, cur *VMByteCode) {
-	emit(sexp[0], cur)
+func emitLen(ctx context.Context, sexp SExpressions, cur *VMByteCode) {
+	emit(ctx, sexp[0], cur)
 	cur.writeOpCode(opLen)
 }
 
-func emitSeth(sexp SExpressions, cur *VMByteCode) {
-	emit(sexp[2], cur) // value
-	emit(sexp[1], cur) // key
-	emit(sexp[0], cur) // hashtable
+func emitSeth(ctx context.Context, sexp SExpressions, cur *VMByteCode) {
+	emit(ctx, sexp[2], cur) // value
+	emit(ctx, sexp[1], cur) // key
+	emit(ctx, sexp[0], cur) // hashtable
 	cur.writeOpCode(opSetHashTableValue)
 }
 
-func emitGeth(sexp SExpressions, cur *VMByteCode) {
-	emit(sexp[1], cur) // key
-	emit(sexp[0], cur) // hashtable
+func emitGeth(ctx context.Context, sexp SExpressions, cur *VMByteCode) {
+	emit(ctx, sexp[1], cur) // key
+	emit(ctx, sexp[0], cur) // hashtable
 	cur.writeOpCode(opGetHashTableValue)
 }
 
@@ -418,12 +438,12 @@ func labelFromParts(parts []Label) Label {
 	return Label(strings.Join(partsStrings, "."))
 }
 
-func emitAnd(v *cons, cur *VMByteCode) {
+func emitAnd(ctx context.Context, v *cons, cur *VMByteCode) {
 	l := consToList(v)
 	andExpressions := l.tail()
 	var indexes []ptr
 	for _, o := range andExpressions {
-		emit(o, cur)
+		emit(ctx, o, cur)
 		var i ptr
 		cur.writeOpCode(opBr).iptr(&i).writeEmptyAddress()
 
@@ -441,19 +461,19 @@ func emitAnd(v *cons, cur *VMByteCode) {
 	}
 }
 
-func emitNot(v *cons, cur *VMByteCode) {
+func emitNot(ctx context.Context, v *cons, cur *VMByteCode) {
 	l := consToList(v)
-	emit(l[1], cur)
+	emit(ctx, l[1], cur)
 	cur.writeOpCode(opNot)
 }
 
-func emitOr(v *cons, cur *VMByteCode) {
+func emitOr(ctx context.Context, v *cons, cur *VMByteCode) {
 	l := consToList(v)
 
 	boolExpressions := l.tail()
 	var indexes []ptr
 	for _, e := range boolExpressions {
-		emit(e, cur)
+		emit(ctx, e, cur)
 		var i, next ptr
 		cur.writeOpCode(opBr).iptr(&next).writeEmptyAddress()
 		cur.writeOpCode(opJmp).iptr(&i).writeEmptyAddress()
@@ -472,27 +492,27 @@ func emitOr(v *cons, cur *VMByteCode) {
 	}
 }
 
-func emitBinaryOp(v *cons, cur *VMByteCode, op opCode, bts ...byte) {
+func emitBinaryOp(ctx context.Context, v *cons, cur *VMByteCode, op opCode, bts ...byte) {
 	l := consToList(v)
 
-	emit(l[1], cur)
-	emit(l[2], cur)
+	emit(ctx, l[1], cur)
+	emit(ctx, l[2], cur)
 
 	cur.writeOpCode(op).b(bts...)
 }
 
-func emitMultiOp(v *cons, cur *VMByteCode, op opCode) {
+func emitMultiOp(ctx context.Context, v *cons, cur *VMByteCode, op opCode) {
 	l := consToList(v)
 
-	emit(l[1], cur)
+	emit(ctx, l[1], cur)
 	for _, e := range l[2:] {
-		emit(e, cur)
+		emit(ctx, e, cur)
 
 		cur.writeOpCode(op)
 	}
 }
 
-func emitDefineFunction(v *cons, cur *VMByteCode) {
+func emitDefineFunction(ctx context.Context, v *cons, cur *VMByteCode) {
 	l := consToList(v).tail()
 	var endLambdaAddress ptr
 	var startDefinitionAddress ptr
@@ -500,7 +520,7 @@ func emitDefineFunction(v *cons, cur *VMByteCode) {
 	cur.writeOpCode(opJmp).iptr(&endLambdaAddress).writeEmptyAddress().iptr(&startDefinitionAddress)
 
 	cur.inNewScope(scopeTypeStackFrame, func() {
-		fn := emitFunction(l.headLiteralValue(), l.tail(), cur)
+		fn := emitFunction(ctx, l.headLiteralValue(), l.tail(), cur)
 		fn.globalAddress = cur.getOrCreateGlobalAddressFor(stackValueFrom(fn))
 		funcDefinitionLength := cur.pos() - startDefinitionAddress
 		cur.modify(endLambdaAddress, offsetAddress(int(funcDefinitionLength)))
@@ -533,7 +553,7 @@ func emitDefineFunction(v *cons, cur *VMByteCode) {
 	})
 }
 
-func emitFunction(name Label, expr SExpressions, cur *VMByteCode) *closure {
+func emitFunction(ctx context.Context, name Label, expr SExpressions, cur *VMByteCode) *closure {
 	cur.scope.addressOffset[valTypeLocal] = callFrameOffset + 1 // skip stack entries stored by CALL opcode
 
 	cur.debug("define function %s", name)
@@ -556,7 +576,7 @@ func emitFunction(name Label, expr SExpressions, cur *VMByteCode) *closure {
 	fn.nargs = len(actualArgs)
 
 	for _, e := range expr.tail() {
-		emit(e, cur)
+		emit(ctx, e, cur)
 	}
 
 	emitReturn(fn, cur)
@@ -593,9 +613,9 @@ func parseArgList(args SExpressions, pos int) (SExpressions, bool) {
 	return actual, restArg
 }
 
-func emitContains(v SExpressions, cur *VMByteCode) {
-	emit(v[1], cur)
-	emit(v[0], cur)
+func emitContains(ctx context.Context, v SExpressions, cur *VMByteCode) {
+	emit(ctx, v[1], cur)
+	emit(ctx, v[0], cur)
 	cur.writeOpCode(opContains)
 }
 
@@ -635,10 +655,10 @@ func emitReturn(cl closure, cur *VMByteCode) {
 	cur.modify(retIndex, cur.pos()-1)
 }
 
-func emitCallFunction(cc *cons, cur *VMByteCode) {
+func emitCallFunction(ctx context.Context, cc *cons, cur *VMByteCode) {
 	args := consToList(cc)
 	if extFunc, ok := cur.externalFunctions[args.headLiteralValue()]; ok {
-		nargs := emitArgs(args.tail(), cur)
+		nargs := emitArgs(ctx, args.tail(), cur)
 		cur.writeOpCode(opPush).writePointer(cur.getOrCreateGlobalAddressFor(extFunc))
 		cur.debug("call external function %s", args.headLiteralValue())
 		cur.writeOpCode(opExtCall).writeInt(nargs)
@@ -647,8 +667,8 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 
 	functionName := args.headLiteralValue()
 	if _, hasVariable := cur.scope.resolveAddress(functionName); hasVariable {
-		nargs := emitArgs(args.tail(), cur)
-		emit(args.head(), cur)
+		nargs := emitArgs(ctx, args.tail(), cur)
+		emit(ctx, args.head(), cur)
 
 		cur.debug("call closure %s", functionName)
 		cur.writeOpCode(opPopCall).writeInt(nargs)
@@ -658,7 +678,7 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 	if fAddress, hasLabel := cur.findFunction(functionName); hasLabel {
 		fargs := consToListN(cc, fAddress.nargs+1)
 
-		emitArgs(fargs.tail(), cur)
+		emitArgs(ctx, fargs.tail(), cur)
 
 		cur.debug("call function %s", functionName)
 
@@ -676,44 +696,44 @@ func emitCallFunction(cc *cons, cur *VMByteCode) {
 	panic(errorx.IllegalArgument.New("unknown function name %s", args.headLiteralValue()).WithProperty(errRawTextPositionProperty, cc.pos))
 }
 
-func emitArgs(args SExpressions, cur *VMByteCode) int {
+func emitArgs(ctx context.Context, args SExpressions, cur *VMByteCode) int {
 	for i := range args {
-		emit(args[i], cur)
+		emit(ctx, args[i], cur)
 	}
 
 	return len(args)
 }
 
-func emitIf(cc *cons, cur *VMByteCode) {
+func emitIf(ctx context.Context, cc *cons, cur *VMByteCode) {
 	l := consToList(cc).tail()
 	condition := l[0]
 	thenBlock := l[1]
 
-	emit(condition, cur)
+	emit(ctx, condition, cur)
 
 	var elseStart, elseEnd ptr
 
 	cur.writeOpCode(opBr).iptr(&elseStart).writeEmptyAddress()
 
-	emit(thenBlock, cur)
+	emit(ctx, thenBlock, cur)
 	if len(l) > 2 { // with else
 		cur.writeOpCode(opJmp).iptr(&elseEnd).writeEmptyAddress()
 	}
 	cur.modify(elseStart, cur.pos())
 	if len(l) > 2 { // with else
 		elseBlock := l[2]
-		emit(elseBlock, cur)
+		emit(ctx, elseBlock, cur)
 		cur.modify(elseEnd, cur.pos())
 	}
 }
 
-func emitSetq(cc *cons, cur *VMByteCode) {
+func emitSetq(ctx context.Context, cc *cons, cur *VMByteCode) {
 	l := consToList(cc).tail()
 
 	valueFullPath := l.headLiteralValue()
 
 	rightValue := l[1]
-	emit(rightValue, cur)
+	emit(ctx, rightValue, cur)
 
 	valuePath := variablePath(valueFullPath)
 
@@ -747,16 +767,16 @@ func emitSetq(cc *cons, cur *VMByteCode) {
 
 }
 
-func emitList(sexp SExpressions, cur *VMByteCode) {
+func emitList(ctx context.Context, sexp SExpressions, cur *VMByteCode) {
 	cur.writeOpCode(opPush).writePointer(cur.getOrCreateGlobalAddressFor(stackValue{}))
 
 	for i := len(sexp) - 1; i >= 1; i-- {
-		emit(sexp[i], cur)
+		emit(ctx, sexp[i], cur)
 		cur.writeOpCode(opCons)
 	}
 }
 
-func emitDoList(v *cons, cur *VMByteCode) {
+func emitDoList(ctx context.Context, v *cons, cur *VMByteCode) {
 	l := consToList(v).tail()
 	loopParams := consToList(l.head().(*cons))
 	loopVar := loopParams[0].(literal).value
@@ -766,7 +786,7 @@ func emitDoList(v *cons, cur *VMByteCode) {
 	cur.inNewScope(scopeTypeLexical, func() {
 		// Lay out two stack slots: an internal `cursor` (the current cdr being
 		// iterated) and the user-visible `loopVar` (the head of the cursor).
-		emit(inputList, cur)
+		emit(ctx, inputList, cur)
 		cursor := cur.scope.createNextAddr("__dolist_cursor_"+cur.newLabelID(), valTypeLocal)
 
 		// Initialise the loopVar slot to nil so the addressOffset matches sp.
@@ -791,7 +811,7 @@ func emitDoList(v *cons, cur *VMByteCode) {
 		cur.writeOpCode(opStore).writePointer(cursor.ptr)
 
 		for _, e := range body {
-			emit(e, cur)
+			emit(ctx, e, cur)
 			// Each top-level body expression leaves +1 on the stack; drop it
 			cur.writeOpCode(opPop)
 		}
@@ -808,19 +828,19 @@ func emitDoList(v *cons, cur *VMByteCode) {
 	})
 }
 
-func emitCallMacro(v *cons, cur *VMByteCode) {
-	emit(expandMacros(v, cur), cur)
+func emitCallMacro(ctx context.Context, v *cons, cur *VMByteCode) {
+	emit(ctx, expandMacros(v, cur), cur)
 }
 
-func emitMacroExpand(v *cons, cur *VMByteCode) {
+func emitMacroExpand(ctx context.Context, v *cons, cur *VMByteCode) {
 	l := consToList(v)
-	emit(l[1], cur)
+	emit(ctx, l[1], cur)
 
 	vmToProduceArgument := NewVM(cur)
 
 	cur.debug("code for macro expand len=%d:\n%v", len(vmToProduceArgument.code), macrosCodeString(vmToProduceArgument))
 
-	if err := vmToProduceArgument.Execute(context.Background()); err != nil {
+	if err := vmToProduceArgument.Execute(ctx); err != nil {
 		errorx.Panic(err)
 	}
 
@@ -877,7 +897,7 @@ func expandMacros(v *cons, cur *VMByteCode) any {
 	return vm.Result()
 }
 
-func emitDefineMacros(v *cons, cur *VMByteCode) {
+func emitDefineMacros(ctx context.Context, v *cons, cur *VMByteCode) {
 	l := consToList(v).tail()
 
 	m := macros{}
@@ -901,7 +921,7 @@ func emitDefineMacros(v *cons, cur *VMByteCode) {
 		lastInstruction := len(cur.code)
 
 		for _, b := range body {
-			emit(b, cur)
+			emit(ctx, b, cur)
 		}
 
 		m.code = make([]byte, len(cur.code[lastInstruction:]))
@@ -912,7 +932,7 @@ func emitDefineMacros(v *cons, cur *VMByteCode) {
 	})
 }
 
-func emitBacktick(v any, cur *VMByteCode) {
+func emitBacktick(ctx context.Context, v any, cur *VMByteCode) {
 	switch vv := v.(type) {
 	case *cons:
 		l := consToList(vv)
@@ -920,13 +940,13 @@ func emitBacktick(v any, cur *VMByteCode) {
 		for i := 0; i < len(l); i++ {
 			v := l[len(l)-1-i]
 			if com, ok := matchMacroSpecialSymbol(v, keywordComma); ok {
-				emit(com, cur)
+				emit(ctx, com, cur)
 				cur.writeOpCode(opCons)
 			} else if spl, ok := matchMacroSpecialSymbol(v, keywordSplice); ok {
-				emit(spl, cur)
+				emit(ctx, spl, cur)
 				cur.writeOpCode(opSplice)
 			} else {
-				emitBacktick(v, cur)
+				emitBacktick(ctx, v, cur)
 				cur.writeOpCode(opCons)
 			}
 		}
@@ -940,7 +960,7 @@ func emitQuote(v any, cur *VMByteCode) {
 	cur.writeOpCode(opPush).writeConstAddr(v)
 }
 
-func emitLambda(v *cons, cur *VMByteCode) {
+func emitLambda(ctx context.Context, v *cons, cur *VMByteCode) {
 	labelID := cur.newLabelID()
 
 	l := consToList(v)
@@ -950,7 +970,7 @@ func emitLambda(v *cons, cur *VMByteCode) {
 	cur.writeOpCode(opJmp).iptr(&endLambdaAddress).writeEmptyAddress().iptr(&startDefinitionAddress)
 
 	cur.inNewScope(scopeTypeStackFrame, func() {
-		fn := emitFunction(Label(labelID), l[1:], cur)
+		fn := emitFunction(ctx, Label(labelID), l[1:], cur)
 
 		funcDefinitionLength := cur.pos() - startDefinitionAddress
 		cur.modify(endLambdaAddress, offsetAddress(int(funcDefinitionLength)))
@@ -989,32 +1009,32 @@ func emitLambda(v *cons, cur *VMByteCode) {
 	})
 }
 
-func emitProgn(v *cons, cur *VMByteCode) {
+func emitProgn(ctx context.Context, v *cons, cur *VMByteCode) {
 	l := consToList(v)
 	cur.inNewScope(scopeTypeLexical, func() {
 		for _, e := range l[1:] {
-			emit(e, cur)
+			emit(ctx, e, cur)
 		}
 	})
 }
 
-func emitPrint(v *cons, cur *VMByteCode) {
+func emitPrint(ctx context.Context, v *cons, cur *VMByteCode) {
 	args := consToList(v).tail()
-	emit(args.head(), cur)
+	emit(ctx, args.head(), cur)
 	cur.writeOpCode(opPrint)
 }
 
-func emitWhile(v *cons, cur *VMByteCode) {
+func emitWhile(ctx context.Context, v *cons, cur *VMByteCode) {
 	l := consToList(v).tail()
 	condition := l.head()
 	body := l.tail()
 	var checkConditionPtr, breakAddress ptr
 
 	checkConditionPtr = cur.pos()
-	emit(condition, cur)
+	emit(ctx, condition, cur)
 	cur.writeOpCode(opBr).iptr(&breakAddress).writeEmptyAddress()
 	for _, b := range body {
-		emit(b, cur)
+		emit(ctx, b, cur)
 	}
 	cur.writeOpCode(opJmp).writePointer(checkConditionPtr)
 	cur.modify(breakAddress, cur.pos())
@@ -1028,22 +1048,22 @@ func emitMakeVector(cur *VMByteCode) {
 	cur.writeOpCode(opMakeVector)
 }
 
-func emitSetv(sexp SExpressions, cur *VMByteCode) {
-	emit(sexp[2], cur) // value
-	emit(sexp[1], cur) // index
-	emit(sexp[0], cur) // vector
+func emitSetv(ctx context.Context, sexp SExpressions, cur *VMByteCode) {
+	emit(ctx, sexp[2], cur) // value
+	emit(ctx, sexp[1], cur) // index
+	emit(ctx, sexp[0], cur) // vector
 	cur.writeOpCode(opSetVectorValue)
 }
 
-func emitGetv(sexp SExpressions, cur *VMByteCode) {
-	emit(sexp[1], cur) // index
-	emit(sexp[0], cur) // vector
+func emitGetv(ctx context.Context, sexp SExpressions, cur *VMByteCode) {
+	emit(ctx, sexp[1], cur) // index
+	emit(ctx, sexp[0], cur) // vector
 	cur.writeOpCode(opGetVectorValue)
 }
 
-func emitAppend(sexp SExpressions, cur *VMByteCode) {
-	emit(sexp[1], cur) // argument
-	emit(sexp[0], cur) // vector
+func emitAppend(ctx context.Context, sexp SExpressions, cur *VMByteCode) {
+	emit(ctx, sexp[1], cur) // argument
+	emit(ctx, sexp[0], cur) // vector
 	cur.writeOpCode(opAppend)
 }
 
@@ -1111,7 +1131,7 @@ func emitMakeStruct(v SExpressions, cur *VMByteCode) {
 	cur.writeOpCode(opMake).writePointer(structPtr)
 }
 
-func emitRequire(v SExpressions, cur *VMByteCode) {
+func emitRequire(ctx context.Context, v SExpressions, cur *VMByteCode) {
 	filePath, ok := v[0].(str)
 	if !ok {
 		errorx.Panic(errorx.IllegalArgument.New("require argument must be a string literal").WithProperty(errRawTextPositionProperty, v[0].(literal).pos))
@@ -1154,7 +1174,7 @@ func emitRequire(v SExpressions, cur *VMByteCode) {
 	}
 
 	for _, e := range expressions {
-		emit(e, cur)
+		emit(ctx, e, cur)
 	}
 
 	if isRoot {

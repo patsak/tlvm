@@ -533,7 +533,7 @@ s
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vmCode, err := Compile(tc.code, tc.options...)
+			vmCode, err := Compile(context.Background(), tc.code, tc.options...)
 			require.NoError(t, err)
 
 			vm := NewVM(vmCode)
@@ -594,7 +594,7 @@ func TestRequire(t *testing.T) {
 (require "%s")
 (+ (g) 8)
 `, bLib.Name())
-		_, err := Compile(text)
+		_, err := Compile(context.Background(), text)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cyclic dependencies")
 	})
@@ -686,7 +686,7 @@ func TestEnvVariables(t *testing.T) {
 	})
 
 	t.Run("NotExists", func(t *testing.T) {
-		_, err := Compile("(+ n 1)")
+		_, err := Compile(context.Background(), "(+ n 1)")
 		require.Error(t, err)
 	})
 }
@@ -752,7 +752,7 @@ c
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			vmCode, err := Compile(stdMacroses+tc.code, tc.options...)
+			vmCode, err := Compile(context.Background(), stdMacroses+tc.code, tc.options...)
 			require.NoError(t, err)
 			vm := NewVM(vmCode)
 			require.NoError(t, vm.Execute(context.Background()), tc.code)
@@ -853,7 +853,7 @@ func TestSmoke(t *testing.T) {
 (geth report "score")
 `
 
-	vmCode, err := Compile(code, ExtFunctionsOrPanic(map[string]any{
+	vmCode, err := Compile(context.Background(), code, ExtFunctionsOrPanic(map[string]any{
 		"match": func(r, s string) bool {
 			return regexp.MustCompile(r).MatchString(s)
 		},
@@ -868,11 +868,11 @@ func TestSmoke(t *testing.T) {
 
 func TestReaderEdgeCases(t *testing.T) {
 	t.Run("CommentAtEOF", func(t *testing.T) {
-		_, err := Compile(`(+ 1 2) ; comment without trailing newline`)
+		_, err := Compile(context.Background(), `(+ 1 2) ; comment without trailing newline`)
 		require.NoError(t, err)
 	})
 	t.Run("UnterminatedString", func(t *testing.T) {
-		_, err := Compile(`"abc`)
+		_, err := Compile(context.Background(), `"abc`)
 		require.Error(t, err)
 	})
 }
@@ -882,7 +882,7 @@ func compileAndRun(t *testing.T, rawText string) string {
 }
 
 func compile(t *testing.T, text string, opts ...CompileOption) *VMByteCode {
-	res, err := Compile(text, opts...)
+	res, err := Compile(context.Background(), text, opts...)
 	require.NoError(t, err)
 	return res
 }
