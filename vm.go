@@ -91,7 +91,6 @@ type VM struct {
 	env                         map[any]ptr    // environment variables pointers
 	debugInfo                   map[int]string // debug string by instruction position
 	originalTextPositionPointer map[int]int    // position in original code text by instruction position
-	labels                      map[Label]*closure
 	interrupt                   interruptCode
 
 	timeout           time.Duration
@@ -156,7 +155,6 @@ func NewVM(output *VMByteCode) *VM {
 	vm.cp = vm.sp
 	vm.env = output.globals
 
-	vm.labels = output.labels
 	vm.debugInfo = output.debugInfo
 	vm.originalTextPositionPointer = output.origTextPositionPointer
 

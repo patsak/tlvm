@@ -537,7 +537,6 @@ s
 			require.NoError(t, err)
 
 			vm := NewVM(vmCode)
-			fmt.Printf("%s\n", vm.CodeString())
 			err = vm.Execute(context.Background())
 			if tc.wantErr {
 				require.Error(t, err, tc.code)
@@ -890,7 +889,6 @@ func compile(t *testing.T, text string, opts ...CompileOption) *VMByteCode {
 
 func run(t *testing.T, code *VMByteCode) string {
 	vm := NewVM(code)
-	fmt.Printf("%s\n", vm.CodeString())
 	require.NoError(t, vm.Execute(context.Background()))
 	return fmt.Sprintf("%v", vm.Result())
 }
